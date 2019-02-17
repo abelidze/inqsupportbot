@@ -14,6 +14,8 @@ let shortidToUuid = {};
 
 console.log('ChatServer is starting...');
 
+// TODO: OOP is really needed
+// TODO: expired sockets
 
 io.on('connection', function (socket) {
     const uuid = cookie.parse(socket.handshake.headers.cookie).uuid;
@@ -35,10 +37,12 @@ io.on('connection', function (socket) {
 
         let passToDiscord = false;
         let response = {
-            type: 'text',
-            author: 'bot',
-            data: {
-                text: 'Сегодня я не доступен, передаю твой вопрос выше.'
+            message: {
+                type: 'text',
+                author: 'bot',
+                data: {
+                    text: 'Сегодня я не доступен, передаю твой вопрос выше.'
+                }
             }
         };
 
@@ -55,7 +59,7 @@ io.on('connection', function (socket) {
             .then(function (responses) {
                 const result = responses[0].queryResult;
                 passToDiscord = (!result.intent || result.action == 'input.unknown');
-                response.data.text = result.fulfillmentText;
+                response.message.data.text = result.fulfillmentText;
             })
             .catch(function (err) {
                 console.error('DialogError:', err);
@@ -91,23 +95,54 @@ discordClient.on('message', function (message) {
         || message.author.tag == discordClient.user.tag
         || !message.cleanContent.startsWith('#'))
     {
-        return null;
+        return;
     }
 
-    const id = message.cleanContent.split(/\s+/, 1)[0].substr(1);
+    const tokens = message.cleanContent.match(/^\#([0-9a-zA-z-_]+)\s*(\@([^\s]+))?\s+([^]*)/);
+    if (tokens == null) {
+        return;
+    }
 
-    if (shortid.isValid(id) && shortidToUuid[id] !== undefined && uuidToClient[shortidToUuid[id]] !== undefined) {
-        // TODO: expired sockets
-        uuidToClient[shortidToUuid[id]].emit('message', {
+    const id = tokens[1];
+    const intent = tokens[3];
+    const answer = tokens[4];
+
+    if (answer.trim().length == 0) {
+        return;
+    }
+
+    if (!shortid.isValid(id)
+        || shortidToUuid[id] === undefined
+        || uuidToClient[shortidToUuid[id]] === undefined)
+    {
+        message.reply('Собеседник не найден!');
+        return;
+    }
+
+    if (intent) {
+        // create / update intent...
+    }
+
+    let response = {
+        message: {
             type: 'text',
             author: 'bot',
             data: {
-                text: message.cleanContent.substr(id.length + 1).trim()
+                text: answer
             }
-        });
-    } else {
-        message.reply('Собеседник не найден!')
+        }
+    };
+
+    if (!message.author.bot) {
+        response.message.author = message.author.tag;
+        response.author = {
+            id: message.author.tag,
+            name: message.author.username,
+            imageUrl: message.author.avatarURL,
+        };
     }
+
+    uuidToClient[shortidToUuid[id]].emit('message', response);
 });
 
 discordClient.login(config.DISCORD_TOKEN);
