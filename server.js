@@ -21,19 +21,59 @@ io.on('connection', function (socket) {
     const uuid = cookie.parse(socket.handshake.headers.cookie).uuid;
     const sessionPath = dialogClient.sessionPath(config.PROJECT_ID, uuid);
     console.log('Dialog: %s connected', uuid);
-    uuidToClient[uuid] = socket;
 
-    const redisClient = redis.createClient({ port: 8060 });
-    redisClient.subscribe('message.' + uuid);
+    if (uuidToClient[uuid] !== undefined && Object.keys(uuidToClient[uuid].socks).length > 0) {
+        uuidToClient[uuid].socks[socket.id] = socket;
+        return;
+    }
 
-    redisClient.on("error", function (err) {
+    let client = {
+        id: shortid.generate(),
+        socks: {},
+        redis: redis.createClient({ port: 8060 }),
+        private: {
+            time: 0,
+            delay: 60000,
+        },
+        throttle: {
+            count: 0,
+            time: 0,
+            limit: {
+                count: 3,
+                time: 10000,
+            },
+        },
+    };
+    client.socks[socket.id] = socket;
+    shortidToUuid[client.id] = uuid;
+
+    client.redis.subscribe('message.' + uuid);
+
+    client.redis.on("error", function (err) {
         console.error("RedisError: ", err);
     });
 
-    redisClient.on('message', function (channel, message) {
+    client.redis.on('message', function (channel, message) {
         if (!channel.startsWith('message.')) {
-            return null;
+            return;
         }
+
+        let timestamp = Date.now();
+        if (timestamp - client.throttle.time > client.throttle.limit.time) {
+            client.throttle.count = 0;
+            client.throttle.time = timestamp;
+        } else if (client.throttle.count >= client.throttle.limit.count) {
+            socket.emit(channel.split('.')[0], {
+                type: 'system',
+                data: {
+                    text: 'Превышен лимит сообщений. Подождите '
+                        + Math.trunc(client.throttle.limit.time / 1000)
+                        + ' секунд и повторите попытку.',
+                }
+            });
+            return;
+        }
+        ++client.throttle.count;
 
         let passToDiscord = false;
         let response = {
@@ -45,6 +85,36 @@ io.on('connection', function (socket) {
                 }
             }
         };
+
+        let sendResponse = async function(private = false) {
+                if (!private) {
+                    socket.emit(channel.split('.')[0], response);
+                }
+
+                if (!passToDiscord) {
+                    return;
+                }
+
+                if (timestamp - client.private.time > client.private.delay) {
+                    client.private.time = timestamp;
+                }
+
+                const textChannel = await discordClient.channels.find(function (ch) {
+                    return ch.name === config.CHANNEL;
+                });
+
+                if (textChannel) {
+                    await textChannel.send(
+                            (private ? '' : '@everyone\n') + `#${client.id}\n${message}`
+                        );
+                }
+            };
+
+        if (timestamp - client.private.time < client.private.delay) {
+            passToDiscord = true;
+            sendResponse(true);
+            return;
+        }
 
         dialogClient
             .detectIntent({
@@ -65,25 +135,17 @@ io.on('connection', function (socket) {
                 console.error('DialogError:', err);
                 passToDiscord = true;
             })
-            .finally(async function () {
-                socket.emit(channel.split('.')[0], response);
-                if (!passToDiscord) return;
-
-                const textChannel = await discordClient.channels.find(function (ch) {
-                    return ch.name === config.CHANNEL;
-                });
-
-                if (textChannel) {
-                    const id = shortid.generate();
-                    shortidToUuid[id] = uuid;
-                    await textChannel.send(`#${id}\n${message}`);
-                }
-            });
+            .finally(sendResponse);
     });
 
     socket.on('disconnect', function () {
-        redisClient.quit();
+        delete client.socks[socket.id];
+        if (Object.keys(client.socks).length == 0) {
+            client.redis.quit();
+        }
     });
+
+    uuidToClient[uuid] = client;
 });
 
 discordClient.on('ready', function () {
@@ -98,14 +160,15 @@ discordClient.on('message', function (message) {
         return;
     }
 
-    const tokens = message.cleanContent.match(/^\#([0-9a-zA-z-_]+)\s*(\@([^\s]+))?\s+([^]*)/);
+    const tokens = message.cleanContent.match(/^\#([0-9a-zA-z\-_]+)\s*(\/([^\s]+))?\s*(\@([^\s]+))?\s+([^]*)/);
     if (tokens == null) {
         return;
     }
 
     const id = tokens[1];
-    const intent = tokens[3];
-    const answer = tokens[4];
+    const command = tokens[3];
+    const intent = tokens[5];
+    const answer = tokens[6];
 
     if (answer.trim().length == 0) {
         return;
@@ -117,6 +180,11 @@ discordClient.on('message', function (message) {
     {
         message.reply('Собеседник не найден!');
         return;
+    }
+
+    switch (command) {
+        case 'ban':
+            break;
     }
 
     if (intent) {
@@ -142,7 +210,12 @@ discordClient.on('message', function (message) {
         };
     }
 
-    uuidToClient[shortidToUuid[id]].emit('message', response);
+    let client = uuidToClient[shortidToUuid[id]];
+    client.private.time = Date.now();
+
+    Object.values(client.socks).forEach(function(sock) {
+        sock.emit('message', response);
+    });
 });
 
 discordClient.login(config.DISCORD_TOKEN);
