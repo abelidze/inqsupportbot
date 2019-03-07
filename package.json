@@ -1,0 +1,14 @@
+{
+    "private": true,
+    "scripts": {
+        "winchat": "start redis-server config/redis.conf && node server.js"
+    },
+    "devDependencies": {},
+    "dependencies": {
+        "cookie": "^0.3.1",
+        "dialogflow": "^0.8.0",
+        "discord.js": "^11.4.2",
+        "redis": "^2.8.0",
+        "shortid": "^2.2.14"
+    }
+}
