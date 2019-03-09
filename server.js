@@ -5,6 +5,9 @@ const discord = require('discord.js');
 const cookie = require('cookie');
 const redis = require('redis');
 const io = require('socket.io').listen(9090);
+const rp = require('request-promise');
+
+const $backend = rp.defaults(config.API_OPTIONS);
 
 const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
@@ -47,14 +50,21 @@ io.on('connection', function (socket) {
     client.socks[socket.id] = socket;
     shortidToUuid[client.id] = uuid;
 
+    client.redis.subscribe('ban.' + uuid);
+    client.redis.subscribe('auth.' + uuid);
     client.redis.subscribe('message.' + uuid);
 
-    client.redis.on("error", function (err) {
-        console.error("RedisError: ", err);
+    client.redis.on('error', function (err) {
+        console.error('RedisError: ', err);
     });
 
     client.redis.on('message', function (channel, message) {
         if (!channel.startsWith('message.')) {
+            if (channel.startsWith('auth.')) {
+                socket.emit('auth', {});
+            } else if (channel.startsWith('ban.')) {
+                socket.emit('ban', {});
+            }
             return;
         }
 
@@ -86,7 +96,7 @@ io.on('connection', function (socket) {
             }
         };
 
-        let sendResponse = async function(private = false) {
+        let processDiscord = async function(private = false) {
                 if (!private) {
                     socket.emit(channel.split('.')[0], response);
                 }
@@ -112,7 +122,7 @@ io.on('connection', function (socket) {
 
         if (timestamp - client.private.time < client.private.delay) {
             passToDiscord = true;
-            sendResponse(true);
+            processDiscord(true);
             return;
         }
 
@@ -135,7 +145,7 @@ io.on('connection', function (socket) {
                 console.error('DialogError:', err);
                 passToDiscord = true;
             })
-            .finally(sendResponse);
+            .finally(processDiscord);
     });
 
     socket.on('disconnect', function () {
@@ -160,7 +170,7 @@ discordClient.on('message', function (message) {
         return;
     }
 
-    const tokens = message.cleanContent.match(/^\#([0-9a-zA-z\-_]+)\s*(\/([^\s]+))?\s*(\@([^\s]+))?\s+([^]*)/);
+    const tokens = message.cleanContent.match(/^\#([0-9a-zA-z\-_]+)\s*(\/([^\s]+))?\s*(\@([^\s]+))?\s*(.*)/);
     if (tokens == null) {
         return;
     }
@@ -170,10 +180,6 @@ discordClient.on('message', function (message) {
     const intent = tokens[5];
     const answer = tokens[6];
 
-    if (answer.trim().length == 0) {
-        return;
-    }
-
     if (!shortid.isValid(id)
         || shortidToUuid[id] === undefined
         || uuidToClient[shortidToUuid[id]] === undefined)
@@ -182,9 +188,55 @@ discordClient.on('message', function (message) {
         return;
     }
 
+    let uuid = shortidToUuid[id];
+    let client = uuidToClient[uuid];
+    client.private.time = Date.now();
+
     switch (command) {
         case 'ban':
+            $backend.get('/api/ban/' + uuid)
+                .then(function () {
+                    console.log('User %s banned', uuid);
+                    Object.values(client.socks).forEach(function(sock) {
+                       sock.emit('ban', {});
+                    });
+                })
+                .catch(function () {
+                    console.log('Can`t ban user %s', uuid);
+                });
             break;
+
+        case 'unban':
+            $backend.get('/api/unban/' + shortidToUuid[id])
+                .then(function () {
+                    console.log('User %s unbanned', uuid);
+                    Object.values(client.socks).forEach(function(sock) {
+                       sock.emit('unban', {});
+                    });
+                })
+                .catch(function () {
+                    console.log('Can`t unban user %s', uuid);
+                });
+            break;
+
+        case 'close':
+            client.private.time = 0;
+            const payload = {
+                message: {
+                    type: 'system',
+                    data: {
+                        text: 'Собеседник завершил беседу'
+                    }
+                }
+            };
+            Object.values(client.socks).forEach(function(sock) {
+               sock.emit('message', payload);
+            });
+            break;
+    }
+
+    if (answer.trim().length == 0) {
+        return;
     }
 
     if (intent) {
@@ -209,9 +261,6 @@ discordClient.on('message', function (message) {
             imageUrl: message.author.avatarURL,
         };
     }
-
-    let client = uuidToClient[shortidToUuid[id]];
-    client.private.time = Date.now();
 
     Object.values(client.socks).forEach(function(sock) {
         sock.emit('message', response);
