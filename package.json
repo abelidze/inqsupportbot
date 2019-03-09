@@ -1,7 +1,7 @@
 {
     "private": true,
     "scripts": {
-        "winchat": "start redis-server config/redis.conf && node server.js"
+        "winchat": "start redis-server config/redis.win.conf && node server.js"
     },
     "devDependencies": {},
     "dependencies": {

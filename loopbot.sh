@@ -1,6 +1,4 @@
 #!/bin/bash
-cd ..
-
 trap "exit" INT
 
 echo "###########################################"
@@ -9,7 +7,7 @@ echo "###########################################"
 
 while true
 do
-node chatbot/server.js
+node server.js
 echo "InqSupportBot is crashed!"
 echo "Rebooting in:"
 for i in {3..1}
