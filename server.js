@@ -172,6 +172,7 @@ io.on('connection', function (socket) {
             client.destroy = setTimeout(function () {
                 client.redis.quit();
                 delete uuidToClient[uuid];
+                console.log('Dialog: %s destroyed', uuid);
             }, 120000);
         }
     });
