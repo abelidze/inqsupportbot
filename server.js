@@ -267,4 +267,9 @@ discordClient.on('message', function (message) {
     });
 });
 
+
+discordClient.on('error', function (err) {
+    console.error('The WebSocket encountered an error:', err);
+});
+
 discordClient.login(config.DISCORD_TOKEN);
