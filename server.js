@@ -22,15 +22,22 @@ console.log('ChatServer is starting...');
 
 io.on('connection', function (socket) {
     const uuid = cookie.parse(socket.handshake.headers.cookie).uuid;
-    const sessionPath = dialogClient.sessionPath(config.PROJECT_ID, uuid);
-    console.log('Dialog: %s connected', uuid);
+    let client = undefined;
 
-    if (uuidToClient[uuid] !== undefined && Object.keys(uuidToClient[uuid].socks).length > 0) {
-        uuidToClient[uuid].socks[socket.id] = socket;
+    if (uuidToClient[uuid] !== undefined) {
+        client = uuidToClient[uuid];
+        if (client.destroy !== undefined) { //(Object.keys(client.socks).length == 0) {
+            clearTimeout(client.destroy);
+            client.destroy = undefined;
+        }
+        client.socks[socket.id] = socket;
         return;
     }
 
-    let client = {
+    const sessionPath = dialogClient.sessionPath(config.PROJECT_ID, uuid);
+    console.log('Dialog: %s connected', uuid);
+
+    client = {
         id: shortid.generate(),
         socks: {},
         redis: redis.createClient({ port: 8060 }),
@@ -151,7 +158,10 @@ io.on('connection', function (socket) {
     socket.on('disconnect', function () {
         delete client.socks[socket.id];
         if (Object.keys(client.socks).length == 0) {
-            client.redis.quit();
+            client.destroy = setTimeout(function () {
+                client.redis.quit();
+                delete uuidToClient[uuid];
+            }, 120000);
         }
     });
 
@@ -266,7 +276,6 @@ discordClient.on('message', function (message) {
         sock.emit('message', response);
     });
 });
-
 
 discordClient.on('error', function (err) {
     console.error('The WebSocket encountered an error:', err);
