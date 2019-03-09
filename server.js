@@ -18,7 +18,8 @@ let shortidToUuid = {};
 console.log('ChatServer is starting...');
 
 // TODO: OOP is really needed
-// TODO: expired sockets
+// TODO: improve expired sockets
+// TODO: improve auth security (it's very nasty and bad at the moment)
 
 io.on('connection', function (socket) {
     const uuid = cookie.parse(socket.handshake.headers.cookie).uuid;
@@ -26,134 +27,144 @@ io.on('connection', function (socket) {
 
     if (uuidToClient[uuid] !== undefined) {
         client = uuidToClient[uuid];
-        if (client.destroy !== undefined) { //(Object.keys(client.socks).length == 0) {
+        if (client.destroy !== undefined) {
             clearTimeout(client.destroy);
             client.destroy = undefined;
         }
-        client.socks[socket.id] = socket;
-        return;
-    }
-
-    const sessionPath = dialogClient.sessionPath(config.PROJECT_ID, uuid);
-    console.log('Dialog: %s connected', uuid);
-
-    client = {
-        id: shortid.generate(),
-        socks: {},
-        redis: redis.createClient({ port: 8060 }),
-        private: {
-            time: 0,
-            delay: 60000,
-        },
-        throttle: {
-            count: 0,
-            time: 0,
-            limit: {
-                count: 3,
-                time: 10000,
+    } else {
+        client = {
+            id: shortid.generate(),
+            session: dialogClient.sessionPath(config.PROJECT_ID, uuid),
+            socks: {},
+            redis: redis.createClient({ port: 8060 }),
+            private: {
+                time: 0,
+                delay: 60000,
             },
-        },
-    };
-    client.socks[socket.id] = socket;
-    shortidToUuid[client.id] = uuid;
-
-    client.redis.subscribe('ban.' + uuid);
-    client.redis.subscribe('auth.' + uuid);
-    client.redis.subscribe('message.' + uuid);
-
-    client.redis.on('error', function (err) {
-        console.error('RedisError: ', err);
-    });
-
-    client.redis.on('message', function (channel, message) {
-        if (!channel.startsWith('message.')) {
-            if (channel.startsWith('auth.')) {
-                socket.emit('auth', {});
-            } else if (channel.startsWith('ban.')) {
-                socket.emit('ban', {});
-            }
-            return;
-        }
-
-        let timestamp = Date.now();
-        if (timestamp - client.throttle.time > client.throttle.limit.time) {
-            client.throttle.count = 0;
-            client.throttle.time = timestamp;
-        } else if (client.throttle.count >= client.throttle.limit.count) {
-            socket.emit(channel.split('.')[0], {
-                type: 'system',
-                data: {
-                    text: 'Превышен лимит сообщений. Подождите '
-                        + Math.trunc(client.throttle.limit.time / 1000)
-                        + ' секунд и повторите попытку.',
-                }
-            });
-            return;
-        }
-        ++client.throttle.count;
-
-        let passToDiscord = false;
-        let response = {
-            message: {
-                type: 'text',
-                author: 'bot',
-                data: {
-                    text: 'Сегодня я не доступен, передаю твой вопрос выше.'
-                }
-            }
+            throttle: {
+                count: 0,
+                time: 0,
+                limit: {
+                    count: 3,
+                    time: 10000,
+                },
+            },
         };
+        shortidToUuid[client.id] = uuid;
+        console.log('Dialog: %s connected', uuid);
 
-        let processDiscord = async function(private = false) {
-                if (!private) {
-                    socket.emit(channel.split('.')[0], response);
+        /// INIT REDIS
+        client.redis.subscribe('ban.' + uuid);
+        client.redis.subscribe('auth.' + uuid);
+        client.redis.subscribe('message.' + uuid);
+
+        client.redis.on('error', function (err) {
+            console.error('RedisError: ', err);
+        });
+
+        client.redis.on('message', function (channel, message) {
+            if (!channel.startsWith('message.')) {
+                if (channel.startsWith('auth.')) {
+                    Object.values(client.socks).forEach(function(sock) {
+                        sock.emit('auth', {});
+                    });
+                } else if (channel.startsWith('ban.')) {
+                    Object.values(client.socks).forEach(function(sock) {
+                        sock.emit('ban', {});
+                    });
                 }
+                return;
+            }
 
-                if (!passToDiscord) {
-                    return;
-                }
-
-                if (timestamp - client.private.time > client.private.delay) {
-                    client.private.time = timestamp;
-                }
-
-                const textChannel = await discordClient.channels.find(function (ch) {
-                    return ch.name === config.CHANNEL;
+            let timestamp = Date.now();
+            if (timestamp - client.throttle.time > client.throttle.limit.time) {
+                client.throttle.count = 0;
+                client.throttle.time = timestamp;
+            } else if (client.throttle.count >= client.throttle.limit.count) {
+                const msg = {
+                    message: {
+                        type: 'system',
+                        data: {
+                            text: 'Превышен лимит сообщений. Подождите '
+                                + Math.trunc(client.throttle.limit.time / 1000)
+                                + ' секунд и повторите попытку.',
+                        }
+                    }
+                };
+                Object.values(client.socks).forEach(function(sock) {
+                    sock.emit('message', msg);
                 });
+                return;
+            }
+            ++client.throttle.count;
 
-                if (textChannel) {
-                    await textChannel.send(
-                            (private ? '' : '@everyone\n') + `#${client.id}\n${message}`
-                        );
+            let passToDiscord = false;
+            let response = {
+                message: {
+                    type: 'text',
+                    author: 'bot',
+                    data: {
+                        text: 'Сегодня я не доступен, передаю твой вопрос выше.'
+                    }
                 }
             };
 
-        if (timestamp - client.private.time < client.private.delay) {
-            passToDiscord = true;
-            processDiscord(true);
-            return;
-        }
-
-        dialogClient
-            .detectIntent({
-                session: sessionPath,
-                queryInput: {
-                    text: {
-                        text: message,
-                        languageCode: 'ru-RU',
+            let processDiscord = async function(private = false) {
+                    if (!private) {
+                        Object.values(client.socks).forEach(function(sock) {
+                            sock.emit('message', response);
+                        });
                     }
-                }
-            })
-            .then(function (responses) {
-                const result = responses[0].queryResult;
-                passToDiscord = (!result.intent || result.action == 'input.unknown');
-                response.message.data.text = result.fulfillmentText;
-            })
-            .catch(function (err) {
-                console.error('DialogError:', err);
+
+                    if (!passToDiscord) {
+                        return;
+                    }
+
+                    if (timestamp - client.private.time > client.private.delay) {
+                        client.private.time = timestamp;
+                    }
+
+                    const textChannel = await discordClient.channels.find(function (ch) {
+                        return ch.name === config.CHANNEL;
+                    });
+
+                    if (textChannel) {
+                        await textChannel.send(
+                                (private ? '' : '@everyone\n') + `#${client.id}\n${message}`
+                            );
+                    }
+                };
+
+            if (timestamp - client.private.time < client.private.delay) {
                 passToDiscord = true;
-            })
-            .finally(processDiscord);
-    });
+                processDiscord(true);
+                return;
+            }
+
+            dialogClient
+                .detectIntent({
+                    session: client.session,
+                    queryInput: {
+                        text: {
+                            text: message,
+                            languageCode: 'ru-RU',
+                        }
+                    }
+                })
+                .then(function (responses) {
+                    const result = responses[0].queryResult;
+                    passToDiscord = (!result.intent || result.action == 'input.unknown');
+                    response.message.data.text = result.fulfillmentText;
+                })
+                .catch(function (err) {
+                    console.error('DialogError:', err);
+                    passToDiscord = true;
+                })
+                .finally(processDiscord);
+        });
+        /// END INIT REDIS
+    }
+    client.socks[socket.id] = socket;
 
     socket.on('disconnect', function () {
         delete client.socks[socket.id];
@@ -210,6 +221,7 @@ discordClient.on('message', function (message) {
                     Object.values(client.socks).forEach(function(sock) {
                        sock.emit('ban', {});
                     });
+                    message.reply('Пользователь заблокирован!');
                 })
                 .catch(function () {
                     console.log('Can`t ban user %s', uuid);
@@ -223,6 +235,7 @@ discordClient.on('message', function (message) {
                     Object.values(client.socks).forEach(function(sock) {
                        sock.emit('unban', {});
                     });
+                    message.reply('Пользователь разблокирован!');
                 })
                 .catch(function () {
                     console.log('Can`t unban user %s', uuid);
@@ -278,7 +291,7 @@ discordClient.on('message', function (message) {
 });
 
 discordClient.on('error', function (err) {
-    console.error('The WebSocket encountered an error:', err);
+    console.error('DiscordError:', err);
 });
 
 discordClient.login(config.DISCORD_TOKEN);
