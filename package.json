@@ -3,6 +3,7 @@
     "scripts": {
         "winchat": "start redis-server config/redis.win.conf && node server.js"
     },
+    "main": "server.js",
     "devDependencies": {},
     "dependencies": {
         "cookie": "^0.3.1",
