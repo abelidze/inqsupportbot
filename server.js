@@ -36,7 +36,7 @@ io.on('connection', function (socket) {
             id: shortid.generate(),
             session: dialogClient.sessionPath(config.PROJECT_ID, uuid),
             socks: {},
-            redis: redis.createClient({ port: 8060 }),
+            redis: redis.createClient({ host:'redis', port: 8060 }),
             private: {
                 time: 0,
                 delay: 60000,
