@@ -1,4 +1,4 @@
-FROM node:latest
+FROM node:11.11.0-alpine
 
 RUN mkdir -p /chat
 WORKDIR /chat
