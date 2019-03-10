@@ -1,7 +1,8 @@
 {
     "private": true,
     "scripts": {
-        "winchat": "start redis-server config/redis.win.conf && node server.js"
+        "winchat": "start redis-server config/redis.win.conf && node server.js",
+        "start": "yarn install && bash loopbot.sh"
     },
     "main": "server.js",
     "devDependencies": {},
