@@ -1,4 +1,4 @@
-FROM node:11.11.0-alpine
+FROM node:11.11.0
 
 RUN mkdir -p /chat
 WORKDIR /chat
