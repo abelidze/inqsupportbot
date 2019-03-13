@@ -154,7 +154,11 @@ io.on('connection', function (socket) {
                 .then(function (responses) {
                     const result = responses[0].queryResult;
                     passToDiscord = (!result.intent || result.action == 'input.unknown');
-                    response.message.data.text = result.fulfillmentText;
+                    if (!passToDiscord && result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
+                        response.message.data.text = result.fulfillmentMessages[0].text.text[0];
+                    } else {
+                        response.message.data.text = result.fulfillmentText;
+                    }
                 })
                 .catch(function (err) {
                     console.error('DialogError:', err);
