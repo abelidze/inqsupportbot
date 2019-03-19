@@ -39,7 +39,7 @@ io.on('connection', function (socket) {
             redis: redis.createClient({ host:'redis', port: 8060 }),
             private: {
                 time: 0,
-                delay: 60000,
+                delay: 90000,
             },
             throttle: {
                 count: 0,
@@ -125,7 +125,7 @@ io.on('connection', function (socket) {
                     }
 
                     const textChannel = await discordClient.channels.find(function (ch) {
-                        return ch.name === config.CHANNEL;
+                        return ch.id === config.CHANNEL;
                     });
 
                     if (textChannel) {
@@ -189,7 +189,7 @@ discordClient.on('ready', function () {
 });
 
 discordClient.on('message', function (message) {
-    if (message.channel.name !== config.CHANNEL
+    if (message.channel.id !== config.CHANNEL
         || message.author.tag == discordClient.user.tag
         || !message.cleanContent.startsWith('#'))
     {
@@ -218,8 +218,40 @@ discordClient.on('message', function (message) {
     let client = uuidToClient[uuid];
     client.private.time = Date.now();
 
+    if (intent) {
+        // create / update intent...
+    }
+
+    if (answer.trim().length > 0) {
+        let response = {
+            message: {
+                type: 'text',
+                author: 'bot',
+                data: {
+                    text: answer
+                }
+            }
+        };
+
+        if (!message.author.bot) {
+            response.message.author = message.author.tag;
+            response.author = {
+                id: message.author.tag,
+                name: message.author.username,
+                imageUrl: message.author.avatarURL,
+            };
+        }
+
+        Object.values(client.socks).forEach(function(sock) {
+            sock.emit('message', response);
+        });
+    }
+
     switch (command) {
         case 'ban':
+            if (!message.member.hasPermission('BAN_MEMBERS')) {
+                break;
+            }
             $backend.get('/api/ban/' + uuid)
                 .then(function () {
                     console.log('User %s banned', uuid);
@@ -234,6 +266,9 @@ discordClient.on('message', function (message) {
             break;
 
         case 'unban':
+            if (!message.member.hasPermission('BAN_MEMBERS')) {
+                break;
+            }
             $backend.get('/api/unban/' + shortidToUuid[id])
                 .then(function () {
                     console.log('User %s unbanned', uuid);
@@ -262,37 +297,6 @@ discordClient.on('message', function (message) {
             });
             break;
     }
-
-    if (answer.trim().length == 0) {
-        return;
-    }
-
-    if (intent) {
-        // create / update intent...
-    }
-
-    let response = {
-        message: {
-            type: 'text',
-            author: 'bot',
-            data: {
-                text: answer
-            }
-        }
-    };
-
-    if (!message.author.bot) {
-        response.message.author = message.author.tag;
-        response.author = {
-            id: message.author.tag,
-            name: message.author.username,
-            imageUrl: message.author.avatarURL,
-        };
-    }
-
-    Object.values(client.socks).forEach(function(sock) {
-        sock.emit('message', response);
-    });
 });
 
 discordClient.on('error', function (err) {
