@@ -2,7 +2,6 @@ const config = require('./config');
 const shortid = require('shortid');
 const dialogflow = require('dialogflow');
 const discord = require('discord.js');
-const twitch = require('tmi.js');
 const cookie = require('cookie');
 const redis = require('redis');
 const io = require('socket.io').listen(9090);
@@ -12,7 +11,6 @@ const $backend = rp.defaults(config.API_OPTIONS);
 
 const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
-const twitchClient = new twitch.client(config.TWITCH_OPTIONS);
 
 let uuidToClient = {};
 let shortidToUuid = {};
@@ -305,50 +303,4 @@ discordClient.on('error', function (err) {
     console.error('DiscordError:', err);
 });
 
-twitchClient.on("connected", function (address, port) {
-    console.log('Twitch connected. Hi, %s!', twitchClient.getUsername());
-});
-
-twitchClient.on("chat", function (channel, user, message, self) {
-    if (self) {
-        return;
-    }
-
-    const tokens = message.match(/^\![Ии][Нн][Кк]\s+(.*)/);
-    if (tokens == null || tokens[1].length == 0) {
-        return;
-    }
-
-    dialogClient
-        .detectIntent({
-            session: dialogClient.sessionPath(config.PROJECT_ID, user['user-id']),
-            queryInput: {
-                text: {
-                    text: tokens[1],
-                    languageCode: 'ru-RU',
-                }
-            }
-        })
-        .then(function (responses) {
-            const result = responses[0].queryResult;
-            if (!result.intent || result.action == 'input.unknown') {
-                return;
-            }
-
-            if (result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
-                twitchClient.say(channel, '@' + user['username'] + ' ' + result.fulfillmentMessages[0].text.text[0]);
-            } else {
-                twitchClient.say(channel, '@' + user['username'] + ' ' + result.fulfillmentText);
-            }
-        })
-        .catch(function (err) {
-            console.error('DialogError:', err);
-        });
-});
-
-twitchClient.on("error", function (err) {
-    console.error('TwitchError:', err);
-});
-
 discordClient.login(config.DISCORD_TOKEN);
-twitchClient.connect();
