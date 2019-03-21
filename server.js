@@ -14,6 +14,11 @@ const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
 const twitchClient = new twitch.client(config.TWITCH_OPTIONS);
 
+let twitchThrottle = {
+        users: {},
+        limit: 8000
+    };
+
 let uuidToClient = {};
 let shortidToUuid = {};
 
@@ -314,17 +319,24 @@ twitchClient.on("chat", function (channel, user, message, self) {
         return;
     }
 
-    const tokens = message.match(/^\![Ии][Нн][Кк]\s+(.*)/);
-    if (tokens == null || tokens[1].length == 0) {
+    const tokens = message.match(/^\!(инк|inq|инкусик)\s+(.*)/i);
+    if (tokens == null || tokens[2].length == 0) {
         return;
     }
+
+    let timestamp = Date.now();
+    let throttle = twitchThrottle.users[user['user-id']];
+    if (throttle && timestamp - throttle < twitchThrottle.limit) {
+        return;
+    }
+    twitchThrottle.users[user['user-id']] = timestamp;
 
     dialogClient
         .detectIntent({
             session: dialogClient.sessionPath(config.PROJECT_ID, user['user-id']),
             queryInput: {
                 text: {
-                    text: tokens[1],
+                    text: tokens[2],
                     languageCode: 'ru-RU',
                 }
             }
