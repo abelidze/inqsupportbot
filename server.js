@@ -14,7 +14,7 @@ const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
 const twitchClient = new twitch.client(config.TWITCH_OPTIONS);
 
-let twitchThrottle = {
+let requestThrottle = {
         users: {},
         limit: 8000
     };
@@ -196,10 +196,18 @@ discordClient.on('ready', function () {
 });
 
 discordClient.on('message', function (message) {
-    if (message.channel.id !== config.CHANNEL
-        || message.author.tag == discordClient.user.tag
-        || !message.cleanContent.startsWith('#'))
-    {
+    if (message.channel.id !== config.CHANNEL || message.author.tag == discordClient.user.tag) {
+        return;
+    }
+
+    if (message.cleanContent.startsWith('!')) {
+        questionHandler('d' + message.author.id, message.cleanContent, function (answer) {
+                message.reply(answer);
+            });
+        return;
+    }
+
+    if (!message.cleanContent.startsWith('#')) {
         return;
     }
 
@@ -315,25 +323,42 @@ twitchClient.on("connected", function (address, port) {
 });
 
 twitchClient.on("chat", function (channel, user, message, self) {
-    if (self) {
+    if (self && !message.startsWith('!')) {
         return;
     }
 
-    const tokens = message.match(/^\!(инк|inq|инкусик)\s+(.*)/i);
+    questionHandler('t' + user['user-id'], message, function (answer) {
+            twitchClient.say(channel, '@' + user['username'] + ' ' + answer);
+        });
+});
+
+twitchClient.on("error", function (err) {
+    console.error('TwitchError:', err);
+});
+
+/**
+ * Handle message and get intent from dialogflow
+ *
+ * @param uuid     object   Unique id for this dialog
+ * @param message  string   Message text
+ * @param callback function Callback for sending response, function (msg) { ... }
+ */
+function questionHandler(uuid, message, callback) {
+    const tokens = message.match(/^\!(инк|inq|инкусик|бот|bot)\s+(.*)/i);
     if (tokens == null || tokens[2].length == 0) {
         return;
     }
 
-    let timestamp = Date.now();
-    let throttle = twitchThrottle.users[user['user-id']];
-    if (throttle && timestamp - throttle < twitchThrottle.limit) {
+    const timestamp = Date.now();
+    const throttle = requestThrottle.users[uuid];
+    if (throttle && timestamp - throttle < requestThrottle.limit) {
         return;
     }
-    twitchThrottle.users[user['user-id']] = timestamp;
+    requestThrottle.users[uuid] = timestamp;
 
     dialogClient
         .detectIntent({
-            session: dialogClient.sessionPath(config.PROJECT_ID, user['user-id']),
+            session: dialogClient.sessionPath(config.PROJECT_ID, uuid),
             queryInput: {
                 text: {
                     text: tokens[2],
@@ -348,19 +373,15 @@ twitchClient.on("chat", function (channel, user, message, self) {
             }
 
             if (result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
-                twitchClient.say(channel, '@' + user['username'] + ' ' + result.fulfillmentMessages[0].text.text[0]);
+                callback(result.fulfillmentMessages[0].text.text[0]);
             } else {
-                twitchClient.say(channel, '@' + user['username'] + ' ' + result.fulfillmentText);
+                callback(result.fulfillmentText);
             }
         })
         .catch(function (err) {
             console.error('DialogError:', err);
         });
-});
-
-twitchClient.on("error", function (err) {
-    console.error('TwitchError:', err);
-});
+}
 
 discordClient.login(config.DISCORD_TOKEN);
 twitchClient.connect();
