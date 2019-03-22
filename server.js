@@ -16,7 +16,7 @@ const twitchClient = new twitch.client(config.TWITCH_OPTIONS);
 
 let requestThrottle = {
         users: {},
-        limit: 8000
+        limit: 5000
     };
 
 let uuidToClient = {};
@@ -205,7 +205,7 @@ discordClient.on('message', function (message) {
 
     if (msg.startsWith('!')) {
         questionHandler('d' + message.author.id, msg, function (answer) {
-                message.reply(answer);
+                message.reply(answer.text);
             });
         return;
     }
@@ -331,7 +331,10 @@ twitchClient.on("chat", function (channel, user, message, self) {
     }
 
     questionHandler('t' + user['user-id'], message.trim(), function (answer) {
-            twitchClient.say(channel, '@' + user['username'] + ' ' + answer);
+            if (answer.action == 'input.unknown') {
+                return;
+            }
+            twitchClient.say(channel, '@' + user['username'] + ' ' + answer.text);
         });
 });
 
@@ -377,15 +380,17 @@ function questionHandler(uuid, message, callback) {
         })
         .then(function (responses) {
             const result = responses[0].queryResult;
-            if (!result.intent || result.action == 'input.unknown') {
+            let msg = {
+                    text: result.fulfillmentText,
+                    action: result.action
+                };
+
+            if (!result.fulfillmentMessages || result.fulfillmentMessages.length == 0) {
+                callback(msg);
                 return;
             }
-
-            if (result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
-                callback(result.fulfillmentMessages[0].text.text[0]);
-            } else {
-                callback(result.fulfillmentText);
-            }
+            msg.text = result.fulfillmentMessages[result.fulfillmentMessages.length - 1].text.text[0];
+            callback(msg);
         })
         .catch(function (err) {
             console.error('DialogError:', err);
