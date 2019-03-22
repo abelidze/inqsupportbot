@@ -27,6 +27,7 @@ console.log('ChatServer is starting...');
 // TODO: OOP is really needed
 // TODO: improve expired sockets
 // TODO: improve auth security (it's very nasty and bad at the moment)
+// TODO: move regex-command for questionHandler to config
 
 io.on('connection', function (socket) {
     const uuid = cookie.parse(socket.handshake.headers.cookie).uuid;
@@ -200,18 +201,20 @@ discordClient.on('message', function (message) {
         return;
     }
 
-    if (message.cleanContent.startsWith('!')) {
-        questionHandler('d' + message.author.id, message.cleanContent, function (answer) {
+    const msg = message.cleanContent.trim();
+
+    if (msg.startsWith('!')) {
+        questionHandler('d' + message.author.id, msg, function (answer) {
                 message.reply(answer);
             });
         return;
     }
 
-    if (!message.cleanContent.startsWith('#')) {
+    if (!msg.startsWith('#')) {
         return;
     }
 
-    const tokens = message.cleanContent.match(/^\#([0-9a-zA-z\-_]+)\s*(\/([^\s]+))?\s*(\@([^\s]+))?\s*(.*)/);
+    const tokens = msg.match(/^\#([0-9a-zA-z\-_]+)\s*(\/([^\s]+))?\s*(\@([^\s]+))?\s*(.*)/);
     if (tokens == null) {
         return;
     }
@@ -327,7 +330,7 @@ twitchClient.on("chat", function (channel, user, message, self) {
         return;
     }
 
-    questionHandler('t' + user['user-id'], message, function (answer) {
+    questionHandler('t' + user['user-id'], message.trim(), function (answer) {
             twitchClient.say(channel, '@' + user['username'] + ' ' + answer);
         });
 });
@@ -344,8 +347,8 @@ twitchClient.on("error", function (err) {
  * @param callback function Callback for sending response, function (msg) { ... }
  */
 function questionHandler(uuid, message, callback) {
-    const tokens = message.match(/^\!(инк|inq|инкусик|бот|bot)\s+(.*)/i);
-    if (tokens == null || tokens[2].length == 0) {
+    const tokens = message.match(/^\!(инк|inq|инкусик|бот|bot)\s*(.*)/i);
+    if (tokens == null) {
         return;
     }
 
@@ -354,6 +357,12 @@ function questionHandler(uuid, message, callback) {
     if (throttle && timestamp - throttle < requestThrottle.limit) {
         return;
     }
+
+    if (tokens[2].length == 0) {
+        callback('Есть вопрос? Напиши в чате !' + tokens[1] + ' ТВОЙ_ВОПРОС');
+        return;
+    }
+
     requestThrottle.users[uuid] = timestamp;
 
     dialogClient
