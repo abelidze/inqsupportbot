@@ -377,7 +377,10 @@ function questionHandler(uuid, message, callback) {
     }
 
     if (tokens[2].length == 0) {
-        callback('Есть вопрос? Напиши в чате !' + tokens[1] + ' ТВОЙ_ВОПРОС');
+        callback({
+                text: 'Есть вопрос? Напиши в чате !' + tokens[1] + ' ТВОЙ_ВОПРОС',
+                action: 'cmd'
+            });
         return;
     }
 
