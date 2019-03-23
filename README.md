@@ -17,7 +17,7 @@ To make it working you must provide:
 1. Configured redis-server / redis service; it must be integrated with your website to pass request to bot;<br />
 It was made this way for using website's auth / ban system.<br />
 Socket.IO is served on 'localhost:9090'.
-2. API-server that has `/api/ban/` and `/api/unban/` endpoints.
+2. API-server that has `/api/ban` and `/api/unban` endpoints.
 It can be accessed by agent-users in specific discord channel.
 3. Discord-channel with users whose answer questions if dialogflow's fallback intent was triggered.
 
