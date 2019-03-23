@@ -29,10 +29,25 @@ console.log('ChatServer is starting...');
 // TODO: improve auth security (it's very nasty and bad at the moment)
 // TODO: move regex-command for questionHandler to config
 
-io.on('connection', function (socket) {
-    const uuid = cookie.parse(socket.handshake.headers.cookie).uuid;
-    let client = undefined;
+io.use(function (socket, next) {
+    if (socket.handshake.headers.cookie || socket.request.headers.cookie) {
+        return next();
+    }
+    next(new Error('Authentication error'));
+});
 
+io.on("error", function (err) {
+    console.error('SocketError:', err);
+});
+
+io.on('connection', function (socket) {
+    socket.cookie = socket.handshake.headers.cookie || socket.request.headers.cookie;
+    const uuid = cookie.parse(socket.cookie).uuid;
+    if (uuid == undefined) {
+        return;
+    }
+
+    let client = undefined;
     if (uuidToClient[uuid] !== undefined) {
         client = uuidToClient[uuid];
         if (client.destroy !== undefined) {
