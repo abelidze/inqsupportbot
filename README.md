@@ -28,9 +28,9 @@ dialogflow from answering dialog specific questions without context.
 After message was redirected to discord you can answer with following syntax:<br/>
 `#<dialog_id> /<command> @<intent_name> <actual_answer>`
 
-* dialog_id - provided in initial message;
-* command - one of: `ban`, `unban`, `close`;
-* intent_name - name of intent for training bot.
+* `dialog_id` - provided in initial message;
+* `command` - one of: `ban`, `unban`, `close`;
+* `intent_name` - name of intent for training bot.
 
 
 Installation
@@ -94,6 +94,13 @@ module.exports = {
             }
         }
     },
+    YOUTUBE_OPTIONS: {
+        clientId: '<YOUTUBE_CLIENT_ID>',
+        clientSecret: '<YOUTUBE_CLIENT_SECRET>',
+        redirectUrl: '<YOUTUBE_REDIRECT>',
+        key: '<YOUTUBE_API_KEY>',
+        scopes: 'https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.force-ssl'
+    },
     REDIS_HOST: '<REDIS_HOST>',
     REDIS_PORT: REDIS_PORT,
     DISCORD_TOKEN: '<DISCORD_BOT_TOKEN>',
@@ -103,16 +110,20 @@ module.exports = {
 
 ```
 
-* ACCOUNT_KEY_FILENAME - filename of your service account .json key;
-* DIALOGFLOW_PROJECT_ID - project id of your dialogflow application, can be found inside .json service key file;
-* APP_BASE_URL - your website url, used for `/api/ban/` and `/api/unban/` API methods;
-* TWITCH_BOT_ACCOUNT_NAME - account username for your twitch-bot;
-* TWITCH_OAUTH_TOKEN - Twitch OAuth token, more info [here](https://twitchapps.com/tmi/);
-* TWITCH_CHANNEL_NAME_x - channels where you want make your bot to work;
-* REDIS_HOST - redis-server host, used for website integration;
-* REDIS_PORT - redis-server port, used for website integration;
-* DISCORD_BOT_TOKEN - your discord bot secret token, used for all discord integrations;
-* DISCORD_CHANNEL_SNOWFLAKE_ID - currently discord bot can serve only one channel by its id.
+* `ACCOUNT_KEY_FILENAME` - filename of your service account .json key;
+* `DIALOGFLOW_PROJECT_ID` - project id of your dialogflow application, can be found inside .json service key file;
+* `APP_BASE_URL` - your website url, used for `/api/ban/` and `/api/unban/` API methods;
+* `TWITCH_BOT_ACCOUNT_NAME` - account username for your twitch-bot;
+* `TWITCH_OAUTH_TOKEN` - Twitch OAuth token, more info [here](https://twitchapps.com/tmi/);
+* `TWITCH_CHANNEL_NAME_x` - channels where you want make your bot to work;
+* `REDIS_HOST` - redis-server host, used for website integration;
+* `REDIS_PORT` - redis-server port, used for website integration;
+* `DISCORD_BOT_TOKEN` - your discord bot secret token, used for all discord integrations;
+* `DISCORD_CHANNEL_SNOWFLAKE_ID` - currently discord bot can serve only one channel by its id.
+* `YOUTUBE_CLIENT_ID` - YouTube Data API v3 Client-ID
+* `YOUTUBE_CLIENT_SECRET` - YouTube Data API v3 Client-Secret
+* `YOUTUBE_REDIRECT` - redirect url for YouTube Data API v3 OAuth
+* `YOUTUBE_API_KEY` - YouTube Data API v3 [API-key](https://console.developers.google.com/apis/credentials)
 
 
 Running

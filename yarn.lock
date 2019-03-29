@@ -190,6 +190,14 @@ aws4@^1.8.0:
   resolved "https://registry.yarnpkg.com/aws4/-/aws4-1.8.0.tgz#f0e003d9ca9e7f59c7a508945d7b2ef9a04a542f"
   integrity sha512-ReZxvNHIOv88FlT7rxcXIIC0fPt4KZqZbOlivyWtXLt8ESx84zd3kMC6iK5jVeS2qt+g7ftS7ye4fi06X5rtRQ==
 
+axios@^0.18.0:
+  version "0.18.0"
+  resolved "https://registry.yarnpkg.com/axios/-/axios-0.18.0.tgz#32d53e4851efdc0a11993b6cd000789d70c05102"
+  integrity sha1-MtU+SFHv3AoRmTts0AB4nXDAUQI=
+  dependencies:
+    follow-redirects "^1.3.0"
+    is-buffer "^1.1.5"
+
 backo2@1.0.2:
   version "1.0.2"
   resolved "https://registry.yarnpkg.com/backo2/-/backo2-1.0.2.tgz#31ab1ac8b129363463e35b3ebb69f4dfcfba7947"
@@ -238,11 +246,6 @@ blob@0.0.5:
   version "0.0.5"
   resolved "https://registry.yarnpkg.com/blob/-/blob-0.0.5.tgz#d680eeef25f8cd91ad533f5b01eed48e64caf683"
   integrity sha512-gaqbzQPqOoamawKg0LGVd7SzLgXS+JH61oWprSLH+P+abTczqJbhTR8CmJ2u9/bUYNmHTGJx/UEmn6doAvvuig==
-
-bluebird@^3.5.0:
-  version "3.5.3"
-  resolved "https://registry.yarnpkg.com/bluebird/-/bluebird-3.5.3.tgz#7d01c6f9616c9a51ab0f8c549a79dfe6ec33efa7"
-  integrity sha512-/qKPUQlaW1OyR51WeCPBvRnAlnZFUJkCSG5HzGnuIqhgyJtF+T94lFnn33eiazjRm2LAHVy2guNnaq48X9SJuw==
 
 brace-expansion@^1.1.7:
   version "1.1.11"
@@ -359,7 +362,7 @@ debug@^2.1.2:
   dependencies:
     ms "2.0.0"
 
-debug@^3.1.0:
+debug@^3.1.0, debug@^3.2.6:
   version "3.2.6"
   resolved "https://registry.yarnpkg.com/debug/-/debug-3.2.6.tgz#e83d17de16d8a7efb7717edbe5fb10135eee629b"
   integrity sha512-mel+jf7nrtEl5Pn1Qx46zARXKDpBbvzezse7p7LqINmdoIk8PYP5SySaxEmYv6TZ0JyEKA1hsCId6DIhgITtWQ==
@@ -548,6 +551,13 @@ fast-text-encoding@^1.0.0:
   version "1.0.0"
   resolved "https://registry.yarnpkg.com/fast-text-encoding/-/fast-text-encoding-1.0.0.tgz#3e5ce8293409cfaa7177a71b9ca84e1b1e6f25ef"
   integrity sha512-R9bHCvweUxxwkDwhjav5vxpFvdPGlVngtqmx4pIZfSUhM/Q4NiIUHB456BAf+Q1Nwu3HEZYONtu+Rya+af4jiQ==
+
+follow-redirects@^1.3.0:
+  version "1.7.0"
+  resolved "https://registry.yarnpkg.com/follow-redirects/-/follow-redirects-1.7.0.tgz#489ebc198dc0e7f64167bd23b03c4c19b5784c76"
+  integrity sha512-m/pZQy4Gj287eNy94nivy5wchN3Kp+Q5WgUPNy5lJSZ3sgkVKSYV/ZChMAQVIgx1SqfZ2zBZtPA2YlXIWxxJOQ==
+  dependencies:
+    debug "^3.2.6"
 
 forever-agent@~0.6.1:
   version "0.6.1"
@@ -787,6 +797,11 @@ invert-kv@^1.0.0:
   resolved "https://registry.yarnpkg.com/invert-kv/-/invert-kv-1.0.0.tgz#104a8e4aaca6d3d8cd157a8ef8bfab2d7a3ffdb6"
   integrity sha1-EEqOSqym09jNFXqO+L+rLXo//bY=
 
+is-buffer@^1.1.5:
+  version "1.1.6"
+  resolved "https://registry.yarnpkg.com/is-buffer/-/is-buffer-1.1.6.tgz#efaa2ea9daa0d7ab2ea13a97b2b8ad51fefbe8be"
+  integrity sha512-NcdALwpXkTm5Zvvbk7owOUSvVvBKDgKP5/ewfXEznmQFfs4ZRmanOeKBTjRVjka3QFoN6XJ+9F3USqfHqTaU5w==
+
 is-fullwidth-code-point@^1.0.0:
   version "1.0.0"
   resolved "https://registry.yarnpkg.com/is-fullwidth-code-point/-/is-fullwidth-code-point-1.0.0.tgz#ef9e31386f031a7f0d643af82fde50c457ef00cb"
@@ -909,11 +924,6 @@ lodash.merge@^4.6.0:
   version "4.6.1"
   resolved "https://registry.yarnpkg.com/lodash.merge/-/lodash.merge-4.6.1.tgz#adc25d9cb99b9391c59624f379fbba60d7111d54"
   integrity sha512-AOYza4+Hf5z1/0Hztxpm2/xiPZgi/cjMqdnKTUWTBSKchJlxXXuUSxCCl8rJlf4g6yww/j6mA8nC8Hw/EZWxKQ==
-
-lodash@^4.17.11:
-  version "4.17.11"
-  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.11.tgz#b39ea6229ef607ecd89e2c8df12536891cac9b8d"
-  integrity sha512-cQKh8igo5QUhZ7lg38DYWAxMvjSAKG0A8wGSVimP07SIUEK2UO+arSRKbRZWtelMtN5V0Hkwh5ryOto/SshYIg==
 
 long@^4.0.0:
   version "4.0.0"
@@ -1204,7 +1214,7 @@ protobufjs@^6.8.0, protobufjs@^6.8.6, protobufjs@^6.8.8:
     "@types/node" "^10.1.0"
     long "^4.0.0"
 
-psl@^1.1.24, psl@^1.1.28:
+psl@^1.1.24:
   version "1.1.31"
   resolved "https://registry.yarnpkg.com/psl/-/psl-1.1.31.tgz#e9aa86d0101b5b105cbe93ac6b784cd547276184"
   integrity sha512-/6pt4+C+T+wZUieKR620OpzN/LlnNKuWjy1iFLQ/UG35JqHlR/89MP1d96dUfkf6Dne3TuLQzOYEYshJ+Hx8mw==
@@ -1214,7 +1224,7 @@ punycode@^1.4.1:
   resolved "https://registry.yarnpkg.com/punycode/-/punycode-1.4.1.tgz#c0d5a63b2718800ad8e1eb0fa5269c84dd41845e"
   integrity sha1-wNWmOycYgArY4esPpSachN1BhF4=
 
-punycode@^2.1.0, punycode@^2.1.1:
+punycode@^2.1.0:
   version "2.1.1"
   resolved "https://registry.yarnpkg.com/punycode/-/punycode-2.1.1.tgz#b58b010ac40c22c5657616c8d2c2c02c7bf479ec"
   integrity sha512-XRsRjdf+j5ml+y/6GKHPZbrF/8p2Yga0JPtdqTIY2Xe5ohJPD9saDJJLPvp9+NSBprVvevdXZybnj2cv8OEd0A==
@@ -1265,23 +1275,6 @@ redis@^2.8.0:
     double-ended-queue "^2.1.0-0"
     redis-commands "^1.2.0"
     redis-parser "^2.6.0"
-
-request-promise-core@1.1.2:
-  version "1.1.2"
-  resolved "https://registry.yarnpkg.com/request-promise-core/-/request-promise-core-1.1.2.tgz#339f6aababcafdb31c799ff158700336301d3346"
-  integrity sha512-UHYyq1MO8GsefGEt7EprS8UrXsm1TxEvFUX1IMTuSLU2Rh7fTIdFtl8xD7JiEYiWU2dl+NYAjCTksTehQUxPag==
-  dependencies:
-    lodash "^4.17.11"
-
-request-promise@^4.2.4:
-  version "4.2.4"
-  resolved "https://registry.yarnpkg.com/request-promise/-/request-promise-4.2.4.tgz#1c5ed0d71441e38ad58c7ce4ea4ea5b06d54b310"
-  integrity sha512-8wgMrvE546PzbR5WbYxUQogUnUDfM0S7QIFZMID+J73vdFARkFy+HElj4T+MWYhpXwlLp0EQ8Zoj8xUA0he4Vg==
-  dependencies:
-    bluebird "^3.5.0"
-    request-promise-core "1.1.2"
-    stealthy-require "^1.1.1"
-    tough-cookie "^2.3.3"
 
 request@2.88.0, request@^2.88.0:
   version "2.88.0"
@@ -1426,11 +1419,6 @@ sshpk@^1.7.0:
     safer-buffer "^2.0.2"
     tweetnacl "~0.14.0"
 
-stealthy-require@^1.1.1:
-  version "1.1.1"
-  resolved "https://registry.yarnpkg.com/stealthy-require/-/stealthy-require-1.1.1.tgz#35b09875b4ff49f26a777e509b3090a3226bf24b"
-  integrity sha1-NbCYdbT/SfJqd35QmzCQoyJr8ks=
-
 stream-shift@^1.0.0:
   version "1.0.0"
   resolved "https://registry.yarnpkg.com/stream-shift/-/stream-shift-1.0.0.tgz#d5c752825e5367e786f78e18e445ea223a155952"
@@ -1512,14 +1500,6 @@ to-array@0.1.4:
   version "0.1.4"
   resolved "https://registry.yarnpkg.com/to-array/-/to-array-0.1.4.tgz#17e6c11f73dd4f3d74cda7a4ff3238e9ad9bf890"
   integrity sha1-F+bBH3PdTz10zaek/zI46a2b+JA=
-
-tough-cookie@^2.3.3:
-  version "2.5.0"
-  resolved "https://registry.yarnpkg.com/tough-cookie/-/tough-cookie-2.5.0.tgz#cd9fb2a0aa1d5a12b473bd9fb96fa3dcff65ade2"
-  integrity sha512-nlLsUzgm1kfLXSXfRZMc1KLAugd4hqJHDTvc2hDIwS3mZAfMEuMbc03SujMF+GEcpaX/qboeycw6iO8JwVv2+g==
-  dependencies:
-    psl "^1.1.28"
-    punycode "^2.1.1"
 
 tough-cookie@~2.4.3:
   version "2.4.3"

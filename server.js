@@ -1,20 +1,26 @@
 const config = require('./config');
 const shortid = require('shortid');
+const readline = require('readline');
 const dialogflow = require('dialogflow');
+const vkbot = require('./vkbot');
+const youtube = require('./youtube');
 const discord = require('discord.js');
 const twitch = require('tmi.js');
 const cookie = require('cookie');
 const redis = require('redis');
+const axios = require('axios');
 const io = require('socket.io').listen(9090);
-const rp = require('request-promise');
+const fs = require('fs');
 
-const $backend = rp.defaults(config.API_OPTIONS);
+const $backend = axios.create(config.API_OPTIONS);
 
 const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
 const twitchClient = new twitch.client(config.TWITCH_OPTIONS);
+const youtubeClient = new youtube.client(config.YOUTUBE_OPTIONS);
+const vkontakteClient = new vkbot.client(config.VKBOT_OPTIONS);
 
-let requestThrottle = {
+let questionThrottle = {
         users: {},
         limit: 5000
     };
@@ -36,7 +42,7 @@ io.use(function (socket, next) {
     next(new Error('Authentication error'));
 });
 
-io.on("error", function (err) {
+io.on('error', function (err) {
     console.error('SocketError:', err);
 });
 
@@ -208,7 +214,7 @@ io.on('connection', function (socket) {
 });
 
 discordClient.on('ready', function () {
-    console.log('Discord connected. Hi, %s!', discordClient.user.tag);
+    console.log('Discord ready. Hi, %s!', discordClient.user.tag);
 });
 
 discordClient.on('message', function (message) {
@@ -336,11 +342,11 @@ discordClient.on('error', function (err) {
     console.error('DiscordError:', err);
 });
 
-twitchClient.on("connected", function (address, port) {
-    console.log('Twitch connected. Hi, %s!', twitchClient.getUsername());
+twitchClient.on('connected', function (address, port) {
+    console.log('Twitch ready. Hi, %s!', twitchClient.getUsername());
 });
 
-twitchClient.on("chat", function (channel, user, message, self) {
+twitchClient.on('chat', function (channel, user, message, self) {
     if (self && !message.startsWith('!')) {
         return;
     }
@@ -353,8 +359,103 @@ twitchClient.on("chat", function (channel, user, message, self) {
         });
 });
 
-twitchClient.on("error", function (err) {
+twitchClient.on('error', function (err) {
     console.error('TwitchError:', err);
+});
+
+youtubeClient.on('login', function () {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+    rl.question(
+        '[Youtube] OAuth url: ' + this.authorizationUrl() + '\n',
+        function (code) {
+            youtubeClient.login(null, code);
+            rl.close();
+        });
+    console.log('[Youtube] Enter your code: ');
+});
+
+youtubeClient.on('ready', function () {
+    console.log('Youtube ready. Hi!');
+    fs.writeFile('config/YoutubeToken.json', JSON.stringify(youtubeClient.getCredentials()), function () {});
+});
+
+youtubeClient.on('message', function (message, user) {
+    if (!message.displayMessage || !message.displayMessage.startsWith('!')) {
+        return;
+    }
+
+    questionHandler('y' + user.channelId, message.displayMessage.trim(), function (answer) {
+            if (answer.action == 'input.unknown') {
+                return;
+            }
+            youtubeClient.sendMessage(('@' + user.displayName + ' ' + answer.text).substr(0, 200))
+                .catch(function (err) {
+                    console.error(err.response.data);
+                });
+        });
+});
+
+youtubeClient.on('online', function () {
+    console.log('Youtube Stream connected.');
+});
+
+youtubeClient.on('offline', function () {
+    console.log('Youtube Stream disconnected.');
+});
+
+youtubeClient.on('error', function (err) {
+    if (err.response.data) {
+        console.error('YoutubeError:', err.response.data);
+    } else {
+        console.error('YoutubeError:', err);
+    }
+});
+
+vkontakteClient.on('ready', function () {
+    console.log('VkBot ready. Hi!');
+});
+
+vkontakteClient.on('error', function (err) {
+    console.error('VKError: ', err);
+});
+
+vkontakteClient.on('message_new', function (message) {
+    if (!message || !message.text || !message.text.startsWith('!')) {
+        return;
+    }
+
+    questionHandler('v' + message.from_id, message.displayMessage.trim(), function (answer) {
+            vkontakteClient.call(
+                'messages.send',
+                Object.assign(
+                    message.from_id < 2000000000
+                    ? { user_ids: (Array.isArray(message.from_id) ? message.from_id : [message.from_id]).join(',') }
+                    : { peer_id: message.from_id },
+                    { message: answer.text }
+                ),
+                vkontakteClient.getSettings().groupToken
+            );
+        });
+});
+
+vkontakteClient.on('video_comment_new', function (comment) {
+    if (!comment || comment.from_id == -vkontakteClient.getSettings().groupId || !comment.text.startsWith('!')) {
+        return;
+    }
+
+    questionHandler('v' + comment.from_id, comment.text.trim(), function (answer) {
+            vkontakteClient.call(
+                'video.createComment',
+                {
+                    from_group: 1,
+                    owner_id: comment.video_owner_id,
+                    video_id: comment.video_id,
+                    message: answer.text,
+                    reply_to_comment: comment.id
+                }
+            );
+        });
 });
 
 /**
@@ -371,8 +472,8 @@ function questionHandler(uuid, message, callback) {
     }
 
     const timestamp = Date.now();
-    const throttle = requestThrottle.users[uuid];
-    if (throttle && timestamp - throttle < requestThrottle.limit) {
+    const throttle = questionThrottle.users[uuid];
+    if (throttle && timestamp - throttle < questionThrottle.limit) {
         return;
     }
 
@@ -384,7 +485,7 @@ function questionHandler(uuid, message, callback) {
         return;
     }
 
-    requestThrottle.users[uuid] = timestamp;
+    questionThrottle.users[uuid] = timestamp;
 
     dialogClient
         .detectIntent({
@@ -415,5 +516,7 @@ function questionHandler(uuid, message, callback) {
         });
 }
 
-discordClient.login(config.DISCORD_TOKEN);
 twitchClient.connect();
+discordClient.login(config.DISCORD_TOKEN);
+youtubeClient.login(config.YOUTUBE_OPTIONS.refreshToken) 
+vkontakteClient.login();
