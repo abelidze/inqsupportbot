@@ -380,6 +380,14 @@ youtubeClient.on('ready', function () {
     fs.writeFile('config/YoutubeToken.json', JSON.stringify(youtubeClient.getCredentials()), function () {});
 });
 
+youtubeClient.on('online', function () {
+    console.log('Youtube Stream connected.');
+});
+
+youtubeClient.on('offline', function () {
+    console.log('Youtube Stream disconnected.');
+});
+
 youtubeClient.on('message', function (message, user) {
     if (!message.displayMessage || !message.displayMessage.startsWith('!')) {
         return;
@@ -394,14 +402,6 @@ youtubeClient.on('message', function (message, user) {
                     console.error(err.response.data);
                 });
         });
-});
-
-youtubeClient.on('online', function () {
-    console.log('Youtube Stream connected.');
-});
-
-youtubeClient.on('offline', function () {
-    console.log('Youtube Stream disconnected.');
 });
 
 youtubeClient.on('error', function (err) {
@@ -522,5 +522,5 @@ function questionHandler(uuid, message, callback) {
 
 twitchClient.connect();
 discordClient.login(config.DISCORD_TOKEN);
-youtubeClient.login(config.YOUTUBE_OPTIONS.refreshToken) 
+youtubeClient.login(config.YOUTUBE_OPTIONS.refreshToken);
 vkontakteClient.login();
