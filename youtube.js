@@ -16,7 +16,8 @@ class Youtube extends OAuth2 {
 
 		this[streamData] = {
 			key: params.key,
-			liveCheck:  params.liveId || 60000,
+			livedt:  params.livedt || 300000,
+			chatdt:  params.chatdt || 20000,
 			liveId: params.liveId || '',
 			chatId: params.chatId || '',
 			channelId: params.channelId || '',
@@ -191,7 +192,7 @@ class Youtube extends OAuth2 {
 					}
 					setTimeout(
 						self[chatPolling].bind(self),
-						Math.max(chat.pollingIntervalMillis, 15000),
+						Math.max(chat.pollingIntervalMillis, self[streamData].chatdt),
 						bootstrap && chat.pageInfo.totalResults > chat.pageInfo.resultsPerPage
 					);
 				}
@@ -227,7 +228,7 @@ class Youtube extends OAuth2 {
 					self.emit('error', err);
 				});
 		}
-		setTimeout(self[runMaster].bind(self), self[streamData].liveCheck);
+		setTimeout(self[runMaster].bind(self), self[streamData].livedt);
 	}
 
 	async [processMessages](messages) {
