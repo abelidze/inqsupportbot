@@ -406,10 +406,14 @@ youtubeClient.on('offline', function () {
 
 youtubeClient.on('error', function (err) {
     if (err.response.data) {
+        if (err.response.data.error && err.response.data.error.message) {
+            console.error('YoutubeError:', err.response.data.error.message);
+            return;
+        }
         console.error('YoutubeError:', err.response.data);
-    } else {
-        console.error('YoutubeError:', err);
+        return;
     }
+    console.error('YoutubeError:', err);
 });
 
 vkontakteClient.on('ready', function () {
