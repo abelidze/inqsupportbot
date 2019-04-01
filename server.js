@@ -16,9 +16,38 @@ const $backend = axios.create(config.API_OPTIONS);
 
 const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
-const twitchClient = new twitch.client(config.TWITCH_OPTIONS);
-const youtubeClient = new youtube.client(config.YOUTUBE_OPTIONS);
-const vkontakteClient = new vkbot.client(config.VKBOT_OPTIONS);
+const twitchClient = new twitch.client(config.TWITCH);
+const vkontakteClient = new vkbot.client(config.VKBOT);
+const youtubeClient = new Proxy(youtube, {
+        clients: [],
+        cursor: {
+            index: 0
+        },
+        register(params) {
+            this.clients.push( registerYoutube(new this.client(params)) );
+        },
+        next() {
+            this.clients[this.cursor.index].stop();
+            if (++this.cursor.index >= this.clients.length) {
+                this.cursor.index = 0;
+            }
+            console.log(`[YouTube] Switch to ${this.clients[this.cursor.index].getStreamData().key}`);
+            this.clients[this.cursor.index].login();
+        },
+        get(obj, key) {
+            if (this[key] !== undefined) {
+                return this[key];
+            }
+            if (this.clients.length > this.cursor.index && this.clients[this.cursor.index][key] !== undefined) {
+                return this.clients[this.cursor.index][key];
+            }
+            if (obj[key] !== undefined) {
+                return obj[key];
+            }
+            throw new Error(`[ProxyError] call to unknown method '${key}'`);
+        }
+    });
+config.YOUTUBE.forEach(credential => youtubeClient.register(credential));
 
 let questionThrottle = {
         users: {},
@@ -30,6 +59,7 @@ let shortidToUuid = {};
 
 console.log('ChatServer is starting...');
 
+// TODO: refactor for ES6+
 // TODO: OOP is really needed
 // TODO: improve expired sockets
 // TODO: improve auth security (it's very nasty and bad at the moment)
@@ -43,7 +73,7 @@ io.use(function (socket, next) {
 });
 
 io.on('error', function (err) {
-    console.error('SocketError:', err);
+    console.error('[SocketError] ', err);
 });
 
 io.on('connection', function (socket) {
@@ -63,7 +93,7 @@ io.on('connection', function (socket) {
     } else {
         client = {
             id: shortid.generate(),
-            session: dialogClient.sessionPath(config.PROJECT_ID, uuid),
+            session: dialogClient.sessionPath(config.DIALOGFLOW_PROJECT, uuid),
             socks: {},
             redis: redis.createClient({ host: config.REDIS_HOST, port: config.REDIS_PORT }),
             private: {
@@ -80,7 +110,7 @@ io.on('connection', function (socket) {
             },
         };
         shortidToUuid[client.id] = uuid;
-        console.log('Dialog: %s connected', uuid);
+        console.log('[Dialog] %s connected', uuid);
 
         /// INIT REDIS
         client.redis.subscribe('ban.' + uuid);
@@ -88,7 +118,7 @@ io.on('connection', function (socket) {
         client.redis.subscribe('message.' + uuid);
 
         client.redis.on('error', function (err) {
-            console.error('RedisError: ', err);
+            console.error('[RedisError] ', err);
         });
 
         client.redis.on('message', function (channel, message) {
@@ -190,7 +220,7 @@ io.on('connection', function (socket) {
                     }
                 })
                 .catch(function (err) {
-                    console.error('DialogError:', err);
+                    console.error('[DialogError] ', err);
                     passToDiscord = true;
                 })
                 .finally(processDiscord);
@@ -205,7 +235,7 @@ io.on('connection', function (socket) {
             client.destroy = setTimeout(function () {
                 client.redis.quit();
                 delete uuidToClient[uuid];
-                console.log('Dialog: %s destroyed', uuid);
+                console.log('[Dialog] %s destroyed', uuid);
             }, 120000);
         }
     });
@@ -214,15 +244,31 @@ io.on('connection', function (socket) {
 });
 
 discordClient.on('ready', function () {
-    console.log('Discord ready. Hi, %s!', discordClient.user.tag);
+    console.log('[Discord] Hi, %s!', discordClient.user.tag);
 });
 
 discordClient.on('message', function (message) {
+    const msg = message.cleanContent.trim();
+    if (message.member && message.member.hasPermission('ADMINISTRATOR') && msg.match(config.YOUTUBE_TRIGGER)) {
+        return youtubeClient.searchStream()
+            .then(function () {
+                if (!youtubeClient.getStreamData().liveId) {
+                    message.reply('YouTube-стрим не найден!');
+                }
+            })
+            .catch(function (err) {
+                message.reply('YouTube API отклонило запрос!');
+                if (err.response) {
+                    console.error('[YoutubeError] ', err.response.data.error);
+                } else {
+                    console.error('[YoutubeError] ', err);
+                }
+            });
+    }
+
     if (message.channel.id !== config.CHANNEL || message.author.tag == discordClient.user.tag) {
         return;
     }
-
-    const msg = message.cleanContent.trim();
 
     if (msg.startsWith('!')) {
         questionHandler('d' + message.author.id, msg, function (answer) {
@@ -339,19 +385,20 @@ discordClient.on('message', function (message) {
 });
 
 discordClient.on('error', function (err) {
-    console.error('DiscordError:', err);
+    console.error('[DiscordError] ', err);
 });
 
 twitchClient.on('connected', function (address, port) {
-    console.log('Twitch ready. Hi, %s!', twitchClient.getUsername());
+    console.log('[Twitch] Hi, %s!', twitchClient.getUsername());
 });
 
 twitchClient.on('chat', function (channel, user, message, self) {
-    if (self && !message.startsWith('!')) {
+    const msg = message.trim();
+    if (self || !msg.startsWith('!') || msg.match(/^\!(инк|inq)/i)) {
         return;
     }
 
-    questionHandler('t' + user['user-id'], message.trim(), function (answer) {
+    questionHandler('t' + user['user-id'], msg, function (answer) {
             if (answer.action == 'input.unknown') {
                 return;
             }
@@ -360,76 +407,24 @@ twitchClient.on('chat', function (channel, user, message, self) {
 });
 
 twitchClient.on('error', function (err) {
-    console.error('TwitchError:', err);
-});
-
-youtubeClient.on('login', function () {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-    rl.question(
-        '[Youtube] OAuth url: ' + this.authorizationUrl() + '\n',
-        function (code) {
-            youtubeClient.login(null, code);
-            rl.close();
-        });
-    console.log('[Youtube] Enter your code: ');
-});
-
-youtubeClient.on('ready', function () {
-    console.log('Youtube ready. Hi!');
-    fs.writeFile('config/YoutubeToken.json', JSON.stringify(youtubeClient.getCredentials()), function () {});
-});
-
-youtubeClient.on('online', function () {
-    console.log('Youtube Stream connected.');
-});
-
-youtubeClient.on('offline', function () {
-    console.log('Youtube Stream disconnected.');
-});
-
-youtubeClient.on('message', function (message, user) {
-    if (!message.displayMessage || !message.displayMessage.startsWith('!')) {
-        return;
-    }
-
-    questionHandler('y' + user.channelId, message.displayMessage.trim(), function (answer) {
-            if (answer.action == 'input.unknown') {
-                return;
-            }
-            youtubeClient.sendMessage(('@' + user.displayName + ' ' + answer.text).substr(0, 200))
-                .catch(function (err) {
-                    console.error(err.response.data);
-                });
-        });
-});
-
-youtubeClient.on('error', function (err) {
-    if (err.response.data) {
-        if (err.response.data.error && err.response.data.error.message) {
-            console.error('YoutubeError:', err.response.data.error.message);
-            return;
-        }
-        console.error('YoutubeError:', err.response.data);
-        return;
-    }
-    console.error('YoutubeError:', err);
+    console.error('[TwitchError] ', err);
 });
 
 vkontakteClient.on('ready', function () {
-    console.log('VkBot ready. Hi!');
+    console.log('[VK] Hi!');
 });
 
 vkontakteClient.on('error', function (err) {
-    console.error('VKError: ', err);
+    console.error('[VKError] ', err);
 });
 
 vkontakteClient.on('message_new', function (message) {
-    if (!message || !message.text || !message.text.startsWith('!')) {
+    const msg = message.text.trim();
+    if (!msg || !msg.startsWith('!') || msg.match(/^\!(инк|inq)/i)) {
         return;
     }
 
-    questionHandler('v' + message.from_id, message.displayMessage.trim(), function (answer) {
+    questionHandler('v' + message.from_id, msg.trim(), function (answer) {
             vkontakteClient.call(
                 'messages.send',
                 Object.assign(
@@ -444,11 +439,13 @@ vkontakteClient.on('message_new', function (message) {
 });
 
 vkontakteClient.on('video_comment_new', function (comment) {
-    if (!comment || comment.from_id == -vkontakteClient.getSettings().groupId || !comment.text.startsWith('!')) {
+    const msg = comment.text.trim();
+    const groupId = -vkontakteClient.getSettings().groupId;
+    if (comment.from_id == groupId || !msg.startsWith('!') || msg.match(/^\!(инк|inq)/i)) {
         return;
     }
 
-    questionHandler('v' + comment.from_id, comment.text.trim(), function (answer) {
+    questionHandler('v' + comment.from_id, msg, function (answer) {
             vkontakteClient.call(
                 'video.createComment',
                 {
@@ -461,6 +458,80 @@ vkontakteClient.on('video_comment_new', function (comment) {
             );
         });
 });
+
+/**
+ *
+ */
+function registerYoutube(client) {
+    client.on('login', function () {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+        rl.question(
+            '[Youtube] OAuth url: ' + this.authorizationUrl() + '\n',
+            function (code) {
+                client.login(code);
+                rl.close();
+            });
+        console.log('[Youtube] Enter your code: ');
+    });
+
+    client.on('ready', function () {
+        console.log('[Youtube] Hi!');
+        fs.writeFile(
+                `config/${client.getStreamData().key}.json`,
+                JSON.stringify(client.getCredentials()),
+                function () {}
+            );
+    });
+
+    client.on('online', function (key) {
+        console.log(`[YouTube] Stream connected, ${key}.`);
+    });
+
+    client.on('offline', function (key) {
+        console.log(`[YouTube] Stream disconnected, ${key}.`);
+    });
+
+    client.on('message', function (message, user) {
+        const msg = message.displayMessage.trim();
+        if (!msg.startsWith('!') || msg.match(/^\!(инк|inq)/i)) {
+            return;
+        }
+
+        questionHandler('y' + user.channelId, msg, function (answer) {
+                if (answer.action == 'input.unknown') {
+                    return;
+                }
+                client.sendMessage(('@' + user.displayName + ' ' + answer.text).substr(0, 195))
+                    .catch(function (err) {
+                        console.error(err.response.data);
+                    });
+            });
+    });
+
+    client.on('error', function (err) {
+        if (err.response && err.response.data) {
+            if (!err.response.data.error) {
+                console.error('[YouTubeError] ', err.response.data);
+                return;
+            }
+            if (err.response.data.error.errors) {
+                for (let e of err.response.data.error.errors) {
+                    if (e.domain != 'youtube.quota') continue;
+                    youtubeClient.next();
+                    return;
+                }
+            }
+            if (err.response.data.error.message) {
+                console.error('[YouTubeError] ', err.response.data.error.message);
+                return;
+            }
+        }
+        console.error('[YouTubeError] ', err);
+    });
+
+    return client;
+}
 
 /**
  * Handle message and get intent from dialogflow
@@ -493,7 +564,7 @@ function questionHandler(uuid, message, callback) {
 
     dialogClient
         .detectIntent({
-            session: dialogClient.sessionPath(config.PROJECT_ID, uuid),
+            session: dialogClient.sessionPath(config.DIALOGFLOW_PROJECT, uuid),
             queryInput: {
                 text: {
                     text: tokens[2],
@@ -516,11 +587,11 @@ function questionHandler(uuid, message, callback) {
             callback(msg);
         })
         .catch(function (err) {
-            console.error('DialogError:', err);
+            console.error('[DialogError] ', err);
         });
 }
 
 twitchClient.connect();
 discordClient.login(config.DISCORD_TOKEN);
-youtubeClient.login(config.YOUTUBE_OPTIONS.refreshToken);
+youtubeClient.login();
 vkontakteClient.login();
