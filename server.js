@@ -257,12 +257,20 @@ discordClient.on('message', function (message) {
                 }
             })
             .catch(function (err) {
-                message.reply('YouTube API отклонило запрос!');
                 if (err.response) {
-                    console.error('[YoutubeError] ', err.response.data.error);
+                    if (err.response.data.error.errors) {
+                        for (let e of err.response.data.error.errors) {
+                            if (e.domain != 'youtube.quota') continue;
+                            youtubeClient.next();
+                            return;
+                        }
+                    } else {
+                        console.error('[YoutubeError] ', err.response.data.error);
+                    }
                 } else {
                     console.error('[YoutubeError] ', err);
                 }
+                message.reply('YouTube API отклонило запрос!');
             });
     }
 
