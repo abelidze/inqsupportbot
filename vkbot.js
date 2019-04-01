@@ -18,10 +18,7 @@ class VkBot extends OAuth2 {
         if (typeof params !== 'object') {
             throw new Error('VkBot params must be object');
         }
-        super(
-            params.clientId, params.clientSecret, params.redirectUrl, params.scopes, params.accessToken || '',
-            'https://oauth.vk.com/', 'authorize', 'access_token'
-        );
+        super(params, 'https://oauth.vk.com/', 'authorize', 'access_token');
 
         this[settings] = {
             apiVersion: '5.92',
@@ -178,6 +175,7 @@ class VkBot extends OAuth2 {
 
             if (!body.failed) {
                 body.updates.forEach(function ({ type, object: update }) {
+                    if (!update) return;
                     self.emit(type, update);
                 });
                 return self[polling](body.ts);
