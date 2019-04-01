@@ -229,7 +229,7 @@ class Youtube extends OAuth2 {
         try {
             await self[checkCredentials]();
 
-            if (!self[streamData].liveId && self[streamData].autoSearch) {
+            if (!self[streamData].liveId && (bootstrap || self[streamData].autoSearch)) {
                 await self.searchStream();
             }
 
@@ -246,7 +246,7 @@ class Youtube extends OAuth2 {
         } catch (err) {
             self.emit('error', err);
         }
-        if (self[timers].master) {
+        if (bootstrap || self[timers].master) {
             self[timers].master = setTimeout(self[runMaster].bind(self), self[streamData].livedt);
         }
     }
