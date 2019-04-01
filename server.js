@@ -502,7 +502,7 @@ function registerYoutube(client) {
                 if (answer.action == 'input.unknown') {
                     return;
                 }
-                client.sendMessage(('@' + user.displayName + ' ' + answer.text).substr(0, 195))
+                client.sendMessage(('@' + user.displayName + ' ' + answer.text).substr(0, 199))
                     .catch(function (err) {
                         console.error(err.response.data);
                     });
