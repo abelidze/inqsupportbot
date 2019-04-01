@@ -121,7 +121,7 @@ io.on('connection', function (socket) {
             console.error('[RedisError] ', err);
         });
 
-        client.redis.on('message', function (channel, message) {
+        client.redis.on('message', function (channel, payload) {
             if (!channel.startsWith('message.')) {
                 if (channel.startsWith('auth.')) {
                     Object.values(client.socks).forEach(function(sock) {
@@ -157,6 +157,12 @@ io.on('connection', function (socket) {
             }
             ++client.throttle.count;
 
+            const tokens = payload.match(/(\[.*?\])?\s*(.+)/);
+
+            if (tokens == null) {
+                return;
+            }
+
             let passToDiscord = false;
             let response = {
                 message: {
@@ -189,7 +195,7 @@ io.on('connection', function (socket) {
 
                     if (textChannel) {
                         await textChannel.send(
-                                (private ? '' : '@everyone\n') + `#${client.id}\n${message}`
+                                (private ? '' : '@everyone\n') + `#${client.id}\n${payload}`
                             );
                     }
                 };
@@ -205,7 +211,7 @@ io.on('connection', function (socket) {
                     session: client.session,
                     queryInput: {
                         text: {
-                            text: message,
+                            text: tokens[2],
                             languageCode: 'ru-RU',
                         }
                     }
