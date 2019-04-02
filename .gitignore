@@ -1,3 +1,4 @@
 /dev
+/config
 /node_modules
 *.sublime*
