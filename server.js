@@ -64,6 +64,7 @@ console.log('ChatServer is starting...');
 // TODO: improve expired sockets
 // TODO: improve auth security (it's very nasty and bad at the moment)
 // TODO: move regex-command for questionHandler to config
+// BUG: YouTube switching not working on bootstrap with offline stream and exceeded quota
 
 io.use(function (socket, next) {
     if (socket.handshake.headers.cookie || socket.request.headers.cookie) {
@@ -73,7 +74,7 @@ io.use(function (socket, next) {
 });
 
 io.on('error', function (err) {
-    console.error('[SocketError] ', err);
+    console.error('[SocketError]', err);
 });
 
 io.on('connection', function (socket) {
@@ -226,7 +227,7 @@ io.on('connection', function (socket) {
                     }
                 })
                 .catch(function (err) {
-                    console.error('[DialogError] ', err);
+                    console.error('[DialogError]', err);
                     passToDiscord = true;
                 })
                 .finally(processDiscord);
@@ -271,10 +272,10 @@ discordClient.on('message', function (message) {
                             return;
                         }
                     } else {
-                        console.error('[YoutubeError] ', err.response.data.error);
+                        console.error('[YoutubeError]', err.response.data.error);
                     }
                 } else {
-                    console.error('[YoutubeError] ', err);
+                    console.error('[YoutubeError]', err);
                 }
                 message.reply('YouTube API отклонило запрос!');
             });
@@ -399,7 +400,7 @@ discordClient.on('message', function (message) {
 });
 
 discordClient.on('error', function (err) {
-    console.error('[DiscordError] ', err);
+    console.error('[DiscordError]', err);
 });
 
 twitchClient.on('connected', function (address, port) {
@@ -421,7 +422,7 @@ twitchClient.on('chat', function (channel, user, message, self) {
 });
 
 twitchClient.on('error', function (err) {
-    console.error('[TwitchError] ', err);
+    console.error('[TwitchError]', err);
 });
 
 vkontakteClient.on('ready', function () {
@@ -429,7 +430,7 @@ vkontakteClient.on('ready', function () {
 });
 
 vkontakteClient.on('error', function (err) {
-    console.error('[VKError] ', err);
+    console.error('[VKError]', err);
 });
 
 vkontakteClient.on('message_new', function (message) {
@@ -526,7 +527,7 @@ function registerYoutube(client) {
     client.on('error', function (err) {
         if (err.response && err.response.data) {
             if (!err.response.data.error) {
-                console.error('[YouTubeError] ', err.response.data);
+                console.error('[YouTubeError]', err.response.data);
                 return;
             }
             if (err.response.data.error.errors) {
@@ -537,11 +538,11 @@ function registerYoutube(client) {
                 }
             }
             if (err.response.data.error.message) {
-                console.error('[YouTubeError] ', err.response.data.error.message);
+                console.error('[YouTubeError]', err.response.data.error.message);
                 return;
             }
         }
-        console.error('[YouTubeError] ', err);
+        console.error('[YouTubeError]', err);
     });
 
     return client;
@@ -601,7 +602,7 @@ function questionHandler(uuid, message, callback) {
             callback(msg);
         })
         .catch(function (err) {
-            console.error('[DialogError] ', err);
+            console.error('[DialogError]', err);
         });
 }
 
