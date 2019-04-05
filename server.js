@@ -111,7 +111,7 @@ io.on('connection', function (socket) {
             },
         };
         shortidToUuid[client.id] = uuid;
-        console.log('[Dialog] %s connected', uuid);
+        // console.log('[Dialog] %s connected', uuid);
 
         /// INIT REDIS
         client.redis.subscribe('ban.' + uuid);
@@ -242,7 +242,7 @@ io.on('connection', function (socket) {
             client.destroy = setTimeout(function () {
                 client.redis.quit();
                 delete uuidToClient[uuid];
-                console.log('[Dialog] %s destroyed', uuid);
+                // console.log('[Dialog] %s destroyed', uuid);
             }, 120000);
         }
     });
@@ -257,28 +257,28 @@ discordClient.on('ready', function () {
 discordClient.on('message', function (message) {
     const msg = message.cleanContent.trim();
     if (message.member && message.member.hasPermission('ADMINISTRATOR') && msg.match(config.YOUTUBE_TRIGGER)) {
-        return youtubeClient.searchStream()
-            .then(function () {
-                if (!youtubeClient.getStreamData().liveId) {
-                    message.reply('YouTube-стрим не найден!');
-                }
-            })
-            .catch(function (err) {
-                if (err.response) {
-                    if (err.response.data.error.errors) {
-                        for (let e of err.response.data.error.errors) {
-                            if (e.domain != 'youtube.quota') continue;
-                            youtubeClient.next();
+        setTimeout(function () {
+            youtubeClient.searchStream()
+                .then(function () {
+                    if (!youtubeClient.getStreamData().liveId) {
+                        message.reply('YouTube-стрим не найден!');
+                    }
+                })
+                .catch(function (err) {
+                    if (err.response) {
+                        if (err.response.data.error.code == 403) {
+                            setTimeout(youtubeClient.next.bind(youtubeClient), 3000);
                             return;
+                        } else {
+                            console.error('[YouTubeError]', err.response.data.error);
                         }
                     } else {
-                        console.error('[YoutubeError]', err.response.data.error);
+                        console.error('[YouTubeError]', err);
                     }
-                } else {
-                    console.error('[YoutubeError]', err);
-                }
-                message.reply('YouTube API отклонило запрос!');
-            });
+                    message.reply('YouTube API отклонило запрос!');
+                });
+            }, 60000);
+        return;
     }
 
     if (message.channel.id !== config.CHANNEL || message.author.tag == discordClient.user.tag) {
@@ -409,12 +409,12 @@ twitchClient.on('connected', function (address, port) {
 
 twitchClient.on('chat', function (channel, user, message, self) {
     const msg = message.trim();
-    if (self || !msg.startsWith('!') || msg.match(/^\!(инк|inq)/i)) {
+    if (self || user['username'].match(/(cepreu|сергей|inqsupportbot|nightbot)[\s_]?(inq|инк)?/i)) {
         return;
     }
 
     questionHandler('t' + user['user-id'], msg, function (answer) {
-            if (answer.action == 'input.unknown') {
+            if (answer.action == 'input.unknown' || (!msg.startsWith('!') && answer.intent.startsWith('smalltalk'))) {
                 return;
             }
             twitchClient.say(channel, '@' + user['username'] + ' ' + answer.text);
@@ -435,7 +435,7 @@ vkontakteClient.on('error', function (err) {
 
 vkontakteClient.on('message_new', function (message) {
     const msg = message.text.trim();
-    if (!msg || !msg.startsWith('!') || msg.match(/^\!(инк|inq)/i)) {
+    if (!msg) {
         return;
     }
 
@@ -456,11 +456,29 @@ vkontakteClient.on('message_new', function (message) {
 vkontakteClient.on('video_comment_new', function (comment) {
     const msg = comment.text.trim();
     const groupId = -vkontakteClient.getSettings().groupId;
-    if (comment.from_id == groupId || !msg.startsWith('!') || msg.match(/^\!(инк|inq)/i)) {
+    if (comment.from_id == groupId) {
         return;
     }
 
+    // if (msg.startsWith('!info') || msg.startsWith('!инфо')) {
+    //     vkontakteClient.call(
+    //         'video.createComment',
+    //         {
+    //             from_group: 1,
+    //             owner_id: comment.video_owner_id,
+    //             video_id: comment.video_id,
+    //             message: 'Ответы на все вопросы по BDO и Стриму http://inq.name',
+    //             reply_to_comment: comment.id
+    //         }
+    //     );
+    //     return;
+    // }
+
     questionHandler('v' + comment.from_id, msg, function (answer) {
+            if (!msg.startsWith('!') && answer.intent.startsWith('smalltalk')) {
+                return;
+            }
+
             vkontakteClient.call(
                 'video.createComment',
                 {
@@ -509,12 +527,21 @@ function registerYoutube(client) {
 
     client.on('message', function (message, user) {
         const msg = message.displayMessage.trim();
-        if (!msg.startsWith('!') || msg.match(/^\!(инк|inq)/i)) {
+
+        if (user.displayName.match(/(cepreu|сергей|inqsupportbot|nightbot)[\s_]?(inq|инк)?/i)) {
+            return;
+        }
+
+        if (msg.startsWith('!info') || msg.startsWith('!инфо')) {
+            client.sendMessage(('@' + user.displayName + ' Ответы на все вопросы по BDO и Стриму http://inq.name'))
+                    .catch(function (err) {
+                        console.error(err.response.data);
+                    });
             return;
         }
 
         questionHandler('y' + user.channelId, msg, function (answer) {
-                if (answer.action == 'input.unknown') {
+                if (answer.action == 'input.unknown' || (!msg.startsWith('!') && answer.intent.startsWith('smalltalk'))) {
                     return;
                 }
                 client.sendMessage(('@' + user.displayName + ' ' + answer.text).substr(0, 199))
@@ -530,12 +557,9 @@ function registerYoutube(client) {
                 console.error('[YouTubeError]', err.response.data);
                 return;
             }
-            if (err.response.data.error.errors) {
-                for (let e of err.response.data.error.errors) {
-                    if (e.domain != 'youtube.quota') continue;
-                    youtubeClient.next();
-                    return;
-                }
+            if (err.response.data.error.code == 403) {
+                youtubeClient.next();
+                return;
             }
             if (err.response.data.error.message) {
                 console.error('[YouTubeError]', err.response.data.error.message);
@@ -556,23 +580,23 @@ function registerYoutube(client) {
  * @param callback function Callback for sending response, function (msg) { ... }
  */
 function questionHandler(uuid, message, callback) {
-    const tokens = message.match(/^\!(инк|inq|инкусик|бот|bot)\s*(.*)/i);
+    const tokens = message.match(/(cepreu_?inq|сергей_?inq|серж|серега?|сергей|inq(supportbot)?|инк|^!инкусик|^!бот|^!bot)[^\wА-я]*(.+)/i);
     if (tokens == null) {
-        return;
+        return false;
     }
 
     const timestamp = Date.now();
     const throttle = questionThrottle.users[uuid];
     if (throttle && timestamp - throttle < questionThrottle.limit) {
-        return;
+        return false;
     }
 
-    if (tokens[2].length == 0) {
+    if (message.startsWith('!') && tokens[3].length < 2) {
         callback({
                 text: 'Есть вопрос? Напиши в чате !' + tokens[1] + ' ТВОЙ_ВОПРОС',
                 action: 'cmd'
             });
-        return;
+        return true;
     }
 
     questionThrottle.users[uuid] = timestamp;
@@ -582,7 +606,7 @@ function questionHandler(uuid, message, callback) {
             session: dialogClient.sessionPath(config.DIALOGFLOW_PROJECT, uuid),
             queryInput: {
                 text: {
-                    text: tokens[2],
+                    text: tokens[3].substr(0, 255),
                     languageCode: 'ru-RU',
                 }
             }
@@ -591,7 +615,8 @@ function questionHandler(uuid, message, callback) {
             const result = responses[0].queryResult;
             let msg = {
                     text: result.fulfillmentText,
-                    action: result.action
+                    action: result.action,
+                    intent: result.intent.displayName,
                 };
 
             if (!result.fulfillmentMessages || result.fulfillmentMessages.length == 0) {
@@ -604,6 +629,7 @@ function questionHandler(uuid, message, callback) {
         .catch(function (err) {
             console.error('[DialogError]', err);
         });
+    return true;
 }
 
 twitchClient.connect();
