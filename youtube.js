@@ -278,7 +278,7 @@ class Youtube extends OAuth2 {
                 }
             })
             .catch(function (err) {
-                    self.emit('error', 'ChatPolling failed');
+                    self.emit('error', err);
                     if (self[streamData].isOnline) {
                         self[streamData].chatId = null;
                     }
