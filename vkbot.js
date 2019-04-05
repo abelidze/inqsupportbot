@@ -195,7 +195,7 @@ class VkBot extends OAuth2 {
             }
         } catch (e) {
             if (e instanceof PollingError) {
-                console.log('PollingError');
+                self.emit('error', 'PollingError');
                 self.pollingParams = null;
                 return self[polling]();
             } else {
