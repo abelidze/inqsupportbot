@@ -1,7 +1,7 @@
-About InqSuppotBot
+About InqSupportBot
 ==================
 
-InqSuppotBot is a chatbot integrated with dialogflow as backend and discord / twitch / socket.io (for website) as frontend.
+InqSupportBot is a chatbot integrated with dialogflow as backend and discord / twitch / socket.io (for website) as frontend.
 
 Code is pretty nasty and dirty and highly needs refactor.
 
