@@ -44,7 +44,7 @@ class Youtube extends OAuth2 {
         };
 
         this.axiosYoutube = axios.create({
-          baseURL: 'https://www.googleapis.com/youtube/v3/'
+            baseURL: 'https://www.googleapis.com/youtube/v3/'
         });
 
         this.on('online', function () { this[streamData].isOnline = true; });
