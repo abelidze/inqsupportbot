@@ -409,7 +409,7 @@ twitchClient.on('connected', function (address, port) {
 
 twitchClient.on('chat', function (channel, user, message, self) {
     const msg = message.trim();
-    if (self || user['username'].match(/(cepreu|сергей|inqsupportbot|nightbot)[\s_]?(inq|инк)?/i)) {
+    if (self || user['username'].match(/(cepreu|сергей|(inqsupport|night|moo)bot)[\s_]?(inq|инк)?/i)) {
         return;
     }
 
@@ -528,17 +528,17 @@ function registerYoutube(client) {
     client.on('message', function (message, user) {
         const msg = message.displayMessage.trim();
 
-        if (user.displayName.match(/(cepreu|сергей|inqsupportbot|nightbot)[\s_]?(inq|инк)?/i)) {
+        if (user.displayName.match(/(cepreu|сергей|(inqsupport|night|moo)bot)[\s_]?(inq|инк)?/i)) {
             return;
         }
 
-        if (msg.startsWith('!info') || msg.startsWith('!инфо')) {
-            client.sendMessage(('@' + user.displayName + ' Ответы на все вопросы по BDO и Стриму http://inq.name'))
-                    .catch(function (err) {
-                        console.error(err.response.data);
-                    });
-            return;
-        }
+        // if (msg.startsWith('!info') || msg.startsWith('!инфо')) {
+        //     client.sendMessage(('@' + user.displayName + ' Ответы на все вопросы по BDO и Стриму http://inq.name'))
+        //             .catch(function (err) {
+        //                 console.error(err.response.data);
+        //             });
+        //     return;
+        // }
 
         questionHandler('y' + user.channelId, msg, function (answer) {
                 if (answer.action == 'input.unknown' || (!msg.startsWith('!') && answer.intent.startsWith('smalltalk'))) {
@@ -580,7 +580,7 @@ function registerYoutube(client) {
  * @param callback function Callback for sending response, function (msg) { ... }
  */
 function questionHandler(uuid, message, callback) {
-    const tokens = message.match(/(cepreu_?inq|сергей_?inq|серж|серега?|сергей|inq(supportbot)?|инк|^!инкусик|^!бот|^!bot)[^\wА-я]*(.+)/i);
+    const tokens = message.match(/(^|[^\wА-я])((cepreu[_\s]?inq|сергей[_\s]?inq|серж|серега?|сергей|inq(supportbot)?|инк)[^\wА-я]+|^!(бот|bot)[^\wА-я]*)(.*)/i);
     if (tokens == null) {
         return false;
     }
@@ -591,12 +591,16 @@ function questionHandler(uuid, message, callback) {
         return false;
     }
 
-    if (message.startsWith('!') && tokens[3].length < 2) {
+    if (message.startsWith('!') && tokens[6].length < 2) {
         callback({
-                text: 'Есть вопрос? Напиши в чате !' + tokens[1] + ' ТВОЙ_ВОПРОС',
+                text: 'Есть вопрос? Напиши в чате ' + tokens[2] + ' ТВОЙ_ВОПРОС',
                 action: 'cmd'
             });
         return true;
+    }
+
+    if (tokens[6].length < 2) {
+        return false;
     }
 
     questionThrottle.users[uuid] = timestamp;
@@ -606,7 +610,7 @@ function questionHandler(uuid, message, callback) {
             session: dialogClient.sessionPath(config.DIALOGFLOW_PROJECT, uuid),
             queryInput: {
                 text: {
-                    text: tokens[3].substr(0, 255),
+                    text: tokens[6].substr(0, 255),
                     languageCode: 'ru-RU',
                 }
             }
