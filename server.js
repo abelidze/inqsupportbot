@@ -56,6 +56,7 @@ let questionThrottle = {
 
 let uuidToClient = {};
 let shortidToUuid = {};
+let botCommands = [];
 
 console.log('ChatServer is starting...');
 
@@ -460,20 +461,6 @@ vkontakteClient.on('video_comment_new', function (comment) {
         return;
     }
 
-    // if (msg.startsWith('!info') || msg.startsWith('!инфо')) {
-    //     vkontakteClient.call(
-    //         'video.createComment',
-    //         {
-    //             from_group: 1,
-    //             owner_id: comment.video_owner_id,
-    //             video_id: comment.video_id,
-    //             message: 'Ответы на все вопросы по BDO и Стриму http://inq.name',
-    //             reply_to_comment: comment.id
-    //         }
-    //     );
-    //     return;
-    // }
-
     questionHandler('v' + comment.from_id, msg, function (answer) {
             if (!msg.startsWith('!') && answer.intent.startsWith('smalltalk')) {
                 return;
@@ -532,14 +519,6 @@ function registerYoutube(client) {
             return;
         }
 
-        // if (msg.startsWith('!info') || msg.startsWith('!инфо')) {
-        //     client.sendMessage(('@' + user.displayName + ' Ответы на все вопросы по BDO и Стриму http://inq.name'))
-        //             .catch(function (err) {
-        //                 console.error(err.response.data);
-        //             });
-        //     return;
-        // }
-
         questionHandler('y' + user.channelId, msg, function (answer) {
                 if (answer.action == 'input.unknown' || (!msg.startsWith('!') && answer.intent.startsWith('smalltalk'))) {
                     return;
@@ -572,6 +551,25 @@ function registerYoutube(client) {
     return client;
 }
 
+function updateCommands(isLooped=true) {
+    $backend.get('/api/commands')
+        .then(function (response) {
+            if (Array.isArray(response.data)) {
+                botCommands = [];
+                for (let cmd of response.data) {
+                    cmd.regex = new RegExp(`^${cmd.regex}(.*)`, 'i');
+                    botCommands.push(cmd);
+                }
+            }
+        })
+        .catch(function (err) {
+            console.log('[ApiError]', err);
+        });
+    if (isLooped) {
+        setTimeout(updateCommands, config.COMMAND_INTERVAL);
+    }
+}
+
 /**
  * Handle message and get intent from dialogflow
  *
@@ -579,27 +577,47 @@ function registerYoutube(client) {
  * @param message  string   Message text
  * @param callback function Callback for sending response, function (msg) { ... }
  */
-function questionHandler(uuid, message, callback) {
-    const tokens = message.match(/(^|[^\wА-я])((cepreu[_\s]?inq|сергей[_\s]?inq|серж|серега?|сергей|inq(supportbot)?|инк)[^\wА-я]+|^!(бот|bot)[^\wА-я]*)(.*)/i);
+function questionHandler(uuid, msg, callback) {
+    let tokens = null;
+
+    for (let cmd of botCommands) {
+        if ((tokens = msg.match(cmd.regex)) !== null) {
+            tokens[tokens.length - 1] = cmd.answer.replace(/{\s*query\s*}/i, tokens[tokens.length - 1].trim());
+            if (!cmd.use_backend) {
+                callback({
+                        text: tokens[tokens.length - 1].trim(),
+                        intent: 'cmd',
+                        action: 'cmd',
+                    });
+                return true;
+            }
+            break;
+        }
+    }
+
+    tokens = tokens || msg.match(config.REGEX);
     if (tokens == null) {
         return false;
     }
 
+    const message = tokens[tokens.length - 1].trim();
     const timestamp = Date.now();
     const throttle = questionThrottle.users[uuid];
     if (throttle && timestamp - throttle < questionThrottle.limit) {
         return false;
     }
 
-    if (message.startsWith('!') && tokens[6].length < 2) {
+    if (msg.startsWith('!') && message.length < 2) {
+        updateCommands(false);
         callback({
-                text: 'Есть вопрос? Напиши в чате ' + tokens[2] + ' ТВОЙ_ВОПРОС',
-                action: 'cmd'
+                text: `Есть вопрос? Напиши в чате ${(msg.match(/^![^\s]+/i) || ['!bot'])[0]} ТВОЙ_ВОПРОС`,
+                intent: 'cmd',
+                action: 'cmd',
             });
         return true;
     }
 
-    if (tokens[6].length < 2) {
+    if (message.length < 2) {
         return false;
     }
 
@@ -610,7 +628,7 @@ function questionHandler(uuid, message, callback) {
             session: dialogClient.sessionPath(config.DIALOGFLOW_PROJECT, uuid),
             queryInput: {
                 text: {
-                    text: tokens[6].substr(0, 255),
+                    text: message.substr(0, 255),
                     languageCode: 'ru-RU',
                 }
             }
@@ -636,6 +654,7 @@ function questionHandler(uuid, message, callback) {
     return true;
 }
 
+updateCommands();
 twitchClient.connect();
 discordClient.login(config.DISCORD_TOKEN);
 youtubeClient.login();
