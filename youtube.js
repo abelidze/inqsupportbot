@@ -117,7 +117,7 @@ class Youtube extends OAuth2 {
 
     async runImmediate() {
         this.stop(true);
-        return await this[runMaster](2, true);
+        return await this[runMaster](true, true);
     }
 
     async getChannel() {
@@ -240,7 +240,7 @@ class Youtube extends OAuth2 {
         let self = this;
 
         try {
-            if (!self[streamData].liveId && (bootstrap == 2 || self[streamData].autoSearch)) {
+            if (!self[streamData].liveId && (bootstrap || self[streamData].autoSearch)) {
                 await self.searchStream();
             }
 
