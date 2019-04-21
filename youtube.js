@@ -10,6 +10,11 @@ const processMessages = Symbol('processMessages');
 const checkCredentials = Symbol('checkCredentials');
 const chatPolling = Symbol('chatPolling');
 const runMaster = Symbol('runMaster');
+const getIdProvider = Symbol('getIdProvider');
+const MANUAL = Symbol('MANUAL');
+const SEARCH = Symbol('SEARCH');
+const PLAYLIST = Symbol('PLAYLIST');
+const BROADCAST = Symbol('BROADCAST');
 
 class Youtube extends OAuth2 {
     constructor(params) {
@@ -24,7 +29,10 @@ class Youtube extends OAuth2 {
             chatdt: params.chatdt || 15000,
             liveId: params.liveId || null,
             chatId: params.chatId || null,
-            channelId: params.channelId || '',
+            channelId: params.channelId || null,
+            playlistId: params.playlistId || null,
+            ownerCredentials: params.ownerCredentials || null,
+            idProvider: this[getIdProvider](params),
             autoSearch: params.autoSearch && true,
             isOnline: false,
             pageToken: '',
@@ -33,6 +41,7 @@ class Youtube extends OAuth2 {
         this[urlsYoutube] = {
             channels: 'channels',
             chats: 'liveChat/messages',
+            playlist: 'playlistItems',
             search: 'search',
             videos: 'videos',
             live: 'liveBroadcasts',
@@ -63,7 +72,7 @@ class Youtube extends OAuth2 {
                     self.emit('error', err);
                 });
         } else if (self.getCredentials().refreshToken) {
-            self.reconnect(self.getCredentials().refreshToken)
+            self[checkCredentials](self.getCredentials())
                 .then(function () {
                     self[timers].master = setTimeout(self[runMaster].bind(self), 10, true);
                     self.emit('ready');
@@ -80,11 +89,13 @@ class Youtube extends OAuth2 {
         }
     }
 
-    stop() {
+    stop(silent = false) {
         if (this[timers].master) {
             clearTimeout(this[timers].master);
             this[timers].master = null;
-            this.emit('stopped');
+            if (!silent) {
+                this.emit('stopped', this[streamData].key);
+            }
         }
         if (this[timers].chat) {
             clearTimeout(this[timers].chat);
@@ -102,6 +113,11 @@ class Youtube extends OAuth2 {
 
     getStreamData() {
         return this[streamData];
+    }
+
+    async runImmediate() {
+        this.stop(true);
+        return await this[runMaster](2, true);
     }
 
     async getChannel() {
@@ -122,38 +138,6 @@ class Youtube extends OAuth2 {
         let url = `https://www.youtube.com/live_stats?v=${this[streamData].liveId}`;
         let result = await axios.get(url);
         return result.data;
-    }
-
-    async liveStream() {
-        let url = this[urlsYoutube].live;
-        let params = {
-            part: 'id,snippet,contentDetails',
-            broadcastType: 'all',
-            broadcastStatus: 'active',
-            key: this[streamData].key
-        };
-
-        let result = await this[getYoutube](url, params);
-        if (result.items[0])
-            this[streamData].liveId = result.items[0].snippet.liveChatId;
-
-        return result;  
-    }
-
-    async liveChat() {
-        if (!this[streamData].chatId) {
-            throw new Error('chatId is undefined, getting chat is impossible');
-        }
-
-        let url = this[urlsYoutube].chats;
-        let params = {
-            part: 'snippet,authorDetails',
-            key: this[streamData].key,
-            liveChatId: this[streamData].chatId,
-            pageToken: this[streamData].pageToken,
-        };
-
-        return await this[getYoutube](url, params);
     }
 
     async sendMessage(message) {
@@ -177,59 +161,86 @@ class Youtube extends OAuth2 {
     }
 
     async searchStream() {
-        console.log('[YouTube] Searching stream...');
-        let url = this[urlsYoutube].search;
-        let params = {
-            part: 'id',
-            channelId: this[streamData].channelId,
-            eventType: 'live',
-            type: 'video',
-            key: this[streamData].key
-        };
-
-        let result = await this[getYoutube](url, params);
-        if (result.items && result.items.length > 0) {
-            this[streamData].liveId = result.items[0].id.videoId;
-        }
-
-        return result;
+        console.log('[YouTube]', 'Searching stream...');
+        return await this[ this[streamData].idProvider ]();
     }
 
     async searchChat() {
         if (!this[streamData].liveId) {
             throw new Error('liveId is undefined, searching chat is impossible');
         }
-        console.log('[YouTube] Searching liveChat...');
+        console.log('[YouTube]', 'Searching liveChat...');
 
         let url = this[urlsYoutube].videos;
         let params = {
             part: 'liveStreamingDetails',
-            key: this[streamData].key,
             id: this[streamData].liveId,
+            key: this[streamData].key,
         };
 
         let result = await this[getYoutube](url, params);
-        if (result.items && result.items.length > 0) {
-            this[streamData].chatId = result.items[0].liveStreamingDetails.activeLiveChatId;
+        if (result.items && result.items.length > 0 && result.items[0].liveStreamingDetails) {
+            const details = result.items[0].liveStreamingDetails;
+            if (details.actualStartTime && details.actualEndTime === undefined) {
+                this[streamData].chatId = details.activeLiveChatId;
+            } else {
+                console.log('[YouTube]', 'liveChat was found, but must be rejected');
+                this[resetStreamData]();
+            }
+        } else {
+            this[resetStreamData]();
+            console.log('[YouTube]', 'liveChat not found');
         }
 
         return result;
     }
 
+    async getLiveChat() {
+        if (!this[streamData].chatId) {
+            throw new Error('chatId is undefined, getting chat is impossible');
+        }
+
+        let url = this[urlsYoutube].chats;
+        let params = {
+            part: 'snippet,authorDetails',
+            key: this[streamData].key,
+            liveChatId: this[streamData].chatId,
+            pageToken: this[streamData].pageToken,
+        };
+
+        return await this[getYoutube](url, params);
+    }
+
     [resetStreamData]() {
-        this[streamData].pageToken = null;
-        this[streamData].liveId = null;
+        if (this[streamData].idProvider !== MANUAL) {
+            this[streamData].liveId = null;
+        }
         this[streamData].chatId = null;
+        this[streamData].pageToken = null;
         this[streamData].isOnline = false;
     }
 
-    async [runMaster](bootstrap = false) {
+    [getIdProvider](config = {}) {
+        if (config.ownerCredentials) {
+            return BROADCAST;
+        }
+        if (config.liveId) {
+            return MANUAL;
+        }
+        if (config.playlistId) {
+            return PLAYLIST;
+        }
+        if (config.channelId) {
+            return SEARCH;
+        }
+        throw new Error('No video_id provider is available');
+    }
+
+    async [runMaster](bootstrap = false, raise = false) {
         let self = this;
 
         try {
-            await self[checkCredentials]();
-
-            if (!self[streamData].liveId && (bootstrap || self[streamData].autoSearch)) {
+            if (!self[streamData].liveId && (bootstrap == 2 || self[streamData].autoSearch)) {
                 await self.searchStream();
             }
 
@@ -240,10 +251,13 @@ class Youtube extends OAuth2 {
             if (self[streamData].isOnline && (!self[streamData].liveId || !self[streamData].chatId)) {
                 self.stop();
             } else if (!self[streamData].isOnline && self[streamData].liveId && self[streamData].chatId) {
-                self.emit('online', this[streamData].key);
+                self.emit('online', self[streamData].key);
                 self[timers].chat = setTimeout(self[chatPolling].bind(self), self[streamData].chatdt, true);
             }
         } catch (err) {
+            if (raise) {
+                throw err;
+            }
             self.emit('error', err);
         }
         if (bootstrap || self[timers].master) {
@@ -254,11 +268,12 @@ class Youtube extends OAuth2 {
     async [chatPolling](bootstrap = false) {
         let self = this;
 
-        await self.liveChat()
+        await self.getLiveChat()
             .then(function (chat) {
                 if (chat.offlineAt) {
                     if (self[streamData].isOnline) {
-                        self.emit('offline', this[streamData].key);
+                        self[streamData].isOnline = false;
+                        self.emit('offline', self[streamData].key);
                     }
                     self[resetStreamData]();
                     return;
@@ -285,23 +300,6 @@ class Youtube extends OAuth2 {
                 });
     }
 
-    async [checkCredentials]() {
-        let self = this;
-        let credentials = self.getCredentials();
-        return await new Promise(function (resolve, reject) {
-                if (credentials.expiresTime < Date.now() / 1000) {
-                    return self.reconnect(credentials.refreshToken)
-                        .then(function () {
-                            resolve();
-                        })
-                        .catch(function (err) {
-                            reject(err);
-                        });
-                }
-                return resolve();
-            });
-    }
-
     async [processMessages](messages) {
         if (!messages || messages.length == 0) {
             return;
@@ -312,24 +310,109 @@ class Youtube extends OAuth2 {
         }
     }
 
-    async [postYoutube](url, params, data) {
+    async [MANUAL]() {
+        return new Promise((resolve, reject) => { resolve() });
+    }
+
+    async [PLAYLIST]() {
+        let url = this[urlsYoutube].playlist;
+        let params = {
+            part: 'contentDetails',
+            maxResults: 1,
+            playlistId: this[streamData].playlistId,
+            key: this[streamData].key
+        };
+
+        let result = await this[getYoutube](url, params);
+        if (result.items && result.items.length > 0) {
+            this[streamData].liveId = result.items[0].contentDetails.videoId;
+        } else {
+            console.log('[YouTube]', 'liveStream not found via PLAYLIST');
+        }
+        return result;
+    }
+
+    async [SEARCH]() {
+        let url = this[urlsYoutube].search;
+        let params = {
+            part: 'id',
+            channelId: this[streamData].channelId,
+            eventType: 'live',
+            type: 'video',
+            key: this[streamData].key
+        };
+
+        let result = await this[getYoutube](url, params);
+        if (result.items && result.items.length > 0) {
+            this[streamData].liveId = result.items[0].id.videoId;
+        } else {
+            console.log('[YouTube]', 'liveStream not found via SEARCH');
+        }
+        return result;
+    }
+
+    async [BROADCAST]() {
+        let url = this[urlsYoutube].live;
+        let params = {
+            part: 'snippet',
+            broadcastType: 'all',
+            broadcastStatus: 'active',
+            fields: 'items(id,snippet/liveChatId)',
+            key: this[streamData].key
+        };
+
+        let result = await this[getYoutube](url, params, this[streamData].ownerCredentials);
+        if (result.items && result.items.length > 0) {
+            this[streamData].liveId = result.items[0].id;
+            this[streamData].chatId = result.items[0].snippet.liveChatId;
+        } else {
+            console.log('[YouTube]', 'liveStream not found via BROADCAST');
+        }
+
+        return result;  
+    }
+
+    async [checkCredentials](credentials) {
+        let self = this;
+        return await new Promise(function (resolve, reject) {
+                if (credentials.expiresTime < Date.now() / 1000) {
+                    return self.reconnect(credentials.refreshToken, credentials)
+                        .then(function () {
+                            resolve();
+                            self.emit('updated');
+                        })
+                        .catch(function (err) {
+                            reject(err);
+                        });
+                }
+                return resolve();
+            });
+    }
+
+    async [postYoutube](url, params, data, credentials) {
+        credentials = credentials || this.getCredentials();
+        await this[checkCredentials](credentials);
+
         let result = await this.axiosYoutube({
             method: 'POST',
             url: url,
             data: data,
             params: params,
-            headers: {Authorization: `Bearer ${this.getCredentials().accessToken}`}
+            headers: {Authorization: `Bearer ${credentials.accessToken}`}
         });
 
         return result.data;
     }
 
-    async [getYoutube](url, params) {
+    async [getYoutube](url, params, credentials) {
+        credentials = credentials || this.getCredentials();
+        await this[checkCredentials](credentials);
+
         let result = await this.axiosYoutube({
             method: 'GET',
             url: url,
             params: params,
-            headers: {Authorization: `Bearer ${this.getCredentials().accessToken}`}
+            headers: {Authorization: `Bearer ${credentials.accessToken}`}
         });
 
         return result.data;

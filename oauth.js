@@ -68,7 +68,9 @@ class OAuth2 extends EventEmitter {
         });
     }
 
-    reconnect(refreshToken) {
+    reconnect(refreshToken, credentials) {
+        credentials = credentials || this[credentialsOAuth];
+
         let url = `${this[urlsOAuth].token}`;
         let data = {
             grant_type: 'refresh_token',
@@ -78,10 +80,10 @@ class OAuth2 extends EventEmitter {
         };
 
         return this[postOAuth](url, data).then((result) => {
-            this[credentialsOAuth].accessToken = result.data.access_token;
-            this[credentialsOAuth].refreshToken = result.data.refresh_token || refreshToken;
-            this[credentialsOAuth].expiresIn = result.data.expires_in;
-            this[credentialsOAuth].expiresTime = Math.floor(Date.now() / 1000) + result.data.expires_in;
+            credentials.accessToken = result.data.access_token;
+            credentials.refreshToken = result.data.refresh_token || refreshToken;
+            credentials.expiresIn = result.data.expires_in;
+            credentials.expiresTime = Math.floor(Date.now() / 1000) + result.data.expires_in;
             this.emit('connected');
 
             return result;

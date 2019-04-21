@@ -259,7 +259,7 @@ discordClient.on('message', function (message) {
     const msg = message.cleanContent.trim();
     if (message.member && message.member.hasPermission('ADMINISTRATOR') && msg.match(config.YOUTUBE_TRIGGER)) {
         setTimeout(function () {
-            youtubeClient.searchStream()
+            youtubeClient.runImmediate()
                 .then(function () {
                     if (!youtubeClient.getStreamData().liveId) {
                         message.reply('YouTube-стрим не найден!');
@@ -276,9 +276,9 @@ discordClient.on('message', function (message) {
                     } else {
                         console.error('[YouTubeError]', err);
                     }
-                    message.reply('YouTube API отклонило запрос!');
+                    message.reply('YouTube-API отклонило запрос!');
                 });
-            }, 60000);
+            }, 15000);
         return;
     }
 
@@ -410,7 +410,7 @@ twitchClient.on('connected', function (address, port) {
 
 twitchClient.on('chat', function (channel, user, message, self) {
     const msg = message.trim();
-    if (self || user['username'].match(/(cepreu|сергей|(inqsupport|night|moo)bot)[\s_]?(inq|инк)?/i)) {
+    if (self || user['username'].match(config.IGNORE)) {
         return;
     }
 
@@ -497,6 +497,9 @@ function registerYoutube(client) {
 
     client.on('ready', function () {
         console.log('[Youtube] Hi!');
+    });
+
+    client.on('updated', function () {
         fs.writeFile(
                 `config/${client.getStreamData().key}.json`,
                 JSON.stringify(client.getCredentials()),
@@ -512,10 +515,14 @@ function registerYoutube(client) {
         console.log(`[YouTube] Stream disconnected, ${key}.`);
     });
 
+    client.on('stopped', function (key) {
+        console.log(`[YouTube] Client stopped, ${key}.`);
+    });
+
     client.on('message', function (message, user) {
         const msg = message.displayMessage.trim();
 
-        if (user.displayName.match(/(cepreu|сергей|(inqsupport|night|moo)bot)[\s_]?(inq|инк)?/i)) {
+        if (user.displayName.match(config.IGNORE)) {
             return;
         }
 
@@ -563,7 +570,15 @@ function updateCommands(isLooped=true) {
             }
         })
         .catch(function (err) {
-            console.log('[ApiError]', err);
+            if (err.response) {
+                console.error('[ApiError]', err.response);
+            } else if (err.message) {
+                console.error('[ApiError]', err.message);
+            } else if (err.errno) {
+                console.error('[ApiError]', err.errno);
+            } else {
+                console.error('[ApiError]', err);
+            }
         });
     if (isLooped) {
         setTimeout(updateCommands, config.COMMAND_INTERVAL);
