@@ -10,6 +10,7 @@ class OAuth2 extends EventEmitter {
         super();
 
         this[credentialsOAuth] = {
+            name: credentials.name || 'token',
             clientId: credentials.clientId,
             clientSecret: credentials.clientSecret,
             redirectUrl: credentials.redirectUrl,
@@ -40,6 +41,7 @@ class OAuth2 extends EventEmitter {
 
     getCredentials() {
         return {
+            name: this[credentialsOAuth].name,
             accessToken: this[credentialsOAuth].accessToken,
             refreshToken: this[credentialsOAuth].refreshToken,
             expiresIn: this[credentialsOAuth].expiresIn,
@@ -62,15 +64,13 @@ class OAuth2 extends EventEmitter {
             this[credentialsOAuth].refreshToken = result.data.refresh_token;
             this[credentialsOAuth].expiresIn = result.data.expires_in;
             this[credentialsOAuth].expiresTime = Math.floor(Date.now() / 1000) + result.data.expires_in;
-            this.emit('connected');
+            this.emit('credentials', this.getCredentials());
 
             return result;
         });
     }
 
-    reconnect(refreshToken, credentials) {
-        credentials = credentials || this[credentialsOAuth];
-
+    reconnect(refreshToken) {
         let url = `${this[urlsOAuth].token}`;
         let data = {
             grant_type: 'refresh_token',
@@ -80,11 +80,11 @@ class OAuth2 extends EventEmitter {
         };
 
         return this[postOAuth](url, data).then((result) => {
-            credentials.accessToken = result.data.access_token;
-            credentials.refreshToken = result.data.refresh_token || refreshToken;
-            credentials.expiresIn = result.data.expires_in;
-            credentials.expiresTime = Math.floor(Date.now() / 1000) + result.data.expires_in;
-            this.emit('connected');
+            this[credentialsOAuth].accessToken = result.data.access_token;
+            this[credentialsOAuth].refreshToken = result.data.refresh_token || refreshToken;
+            this[credentialsOAuth].expiresIn = result.data.expires_in;
+            this[credentialsOAuth].expiresTime = Math.floor(Date.now() / 1000) + result.data.expires_in;
+            this.emit('credentials', this.getCredentials());
 
             return result;
         });
@@ -101,9 +101,26 @@ class OAuth2 extends EventEmitter {
             this[credentialsOAuth].refreshToken = '';
             this[credentialsOAuth].expiresIn = '';
             this[credentialsOAuth].expiresTime = '';
+            this.emit('credentials', this.getCredentials());
 
             return result;
         });
+    }
+
+    async check() {
+        let self = this;
+        return await new Promise(function (resolve, reject) {
+                if (self[credentialsOAuth].expiresTime < Date.now() / 1000) {
+                    return self.reconnect(self[credentialsOAuth].refreshToken)
+                        .then(function () {
+                            resolve();
+                        })
+                        .catch(function (err) {
+                            reject(err);
+                        });
+                }
+                return resolve();
+            });
     }
 
     [postOAuth](url, data) {

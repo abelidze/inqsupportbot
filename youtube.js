@@ -7,7 +7,6 @@ const urlsYoutube = Symbol('urlsYoutube');
 const timers = Symbol('timers');
 const resetStreamData = Symbol('resetStreamData');
 const processMessages = Symbol('processMessages');
-const checkCredentials = Symbol('checkCredentials');
 const chatPolling = Symbol('chatPolling');
 const runMaster = Symbol('runMaster');
 const getIdProvider = Symbol('getIdProvider');
@@ -21,6 +20,7 @@ class Youtube extends OAuth2 {
         if (typeof params !== 'object') {
             throw new Error('YouTube params must be object');
         }
+        params.name = params.name || params.key;
         super(params, 'https://accounts.google.com/o/oauth2/', 'auth');
 
         this[streamData] = {
@@ -31,12 +31,16 @@ class Youtube extends OAuth2 {
             chatId: params.chatId || null,
             channelId: params.channelId || null,
             playlistId: params.playlistId || null,
-            ownerCredentials: params.ownerCredentials || null,
+            ownerCredentials: null,
             idProvider: this[getIdProvider](params),
             autoSearch: params.autoSearch && true,
             isOnline: false,
             pageToken: '',
         };
+
+        if (params.ownerCredentials) {
+            this[streamData].ownerCredentials = new OAuth2(params.ownerCredentials, 'https://accounts.google.com/o/oauth2/', 'auth');
+        }
 
         this[urlsYoutube] = {
             channels: 'channels',
@@ -72,7 +76,7 @@ class Youtube extends OAuth2 {
                     self.emit('error', err);
                 });
         } else if (self.getCredentials().refreshToken) {
-            self[checkCredentials](self.getCredentials())
+            self.check()
                 .then(function () {
                     self[timers].master = setTimeout(self[runMaster].bind(self), 10, true);
                     self.emit('ready');
@@ -183,6 +187,7 @@ class Youtube extends OAuth2 {
             const details = result.items[0].liveStreamingDetails;
             if (details.actualStartTime && details.actualEndTime === undefined) {
                 this[streamData].chatId = details.activeLiveChatId;
+                console.log('[YouTube]', this[streamData].liveId, this[streamData].chatId);
             } else {
                 console.log('[YouTube]', 'liveChat was found, but must be rejected');
                 this[resetStreamData]();
@@ -372,47 +377,30 @@ class Youtube extends OAuth2 {
         return result;  
     }
 
-    async [checkCredentials](credentials) {
-        let self = this;
-        return await new Promise(function (resolve, reject) {
-                if (credentials.expiresTime < Date.now() / 1000) {
-                    return self.reconnect(credentials.refreshToken, credentials)
-                        .then(function () {
-                            resolve();
-                            self.emit('updated');
-                        })
-                        .catch(function (err) {
-                            reject(err);
-                        });
-                }
-                return resolve();
-            });
-    }
-
-    async [postYoutube](url, params, data, credentials) {
-        credentials = credentials || this.getCredentials();
-        await this[checkCredentials](credentials);
+    async [postYoutube](url, params, data, oauth) {
+        oauth = oauth || this;
+        await oauth.check();
 
         let result = await this.axiosYoutube({
             method: 'POST',
             url: url,
             data: data,
             params: params,
-            headers: {Authorization: `Bearer ${credentials.accessToken}`}
+            headers: {Authorization: `Bearer ${oauth.getCredentials().accessToken}`}
         });
 
         return result.data;
     }
 
-    async [getYoutube](url, params, credentials) {
-        credentials = credentials || this.getCredentials();
-        await this[checkCredentials](credentials);
+    async [getYoutube](url, params, oauth) {
+        oauth = oauth || this;
+        await oauth.check();
 
         let result = await this.axiosYoutube({
             method: 'GET',
             url: url,
             params: params,
-            headers: {Authorization: `Bearer ${credentials.accessToken}`}
+            headers: {Authorization: `Bearer ${oauth.getCredentials().accessToken}`}
         });
 
         return result.data;

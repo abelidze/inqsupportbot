@@ -65,8 +65,6 @@ const uuidToClient = {};
 const shortidToUuid = {};
 let botCommands = [];
 
-console.log('ChatServer is starting...');
-
 // TODO: refactor for ES6+
 // TODO: OOP is really needed
 // TODO: improve expired sockets
@@ -511,8 +509,10 @@ vkontakteClient.on('video_comment_new', function (comment) {
 alertsClient.on('connect', () => {
     alertsClient.emit('add-user', { token: config.DALERTS.token, type: 'minor' });
     console.log('[DAlerts]', 'Connected!');
+    setTimeout(getLastSongText, 1000);
 });
 
+// alerts.on('donation', function(data) { });
 alertsClient.on('media', data => {
     if (typeof data === 'string') {
         data = JSON.parse(data);
@@ -520,10 +520,39 @@ alertsClient.on('media', data => {
     if (!data || typeof data.action === 'undefined') {
         return;
     }
+    config.DALERTS.timestamp = Date.now();
+    switch (data.action) {
+        case 'play':
+        case 'receive-current-media':
+            config.DALERTS.songTitle = data.media.title;
+            config.DALERTS.songUrl = null;
+            if (data.media.sub_type && data.media.sub_type == 'youtube') {
+                config.DALERTS.songUrl = `https://youtu.be/${data.media.additional_data.video_id}`;
+            }
+            break;
+    }
     for (let bonus of config.DALERTS.specials) {
         handleBonusMode(data, bonus);
     }
 });
+
+function getLastSongText(fallback) {
+    const timestamp = Date.now();
+    if (timestamp - config.DALERTS.timestamp > config.DALERTS.cacheTimeout) {
+        config.DALERTS.songTitle = null;
+        config.DALERTS.songUrl = null;
+        config.DALERTS.timestamp = timestamp;
+    }
+
+    if (config.DALERTS.songTitle) {
+        return `${config.DALERTS.songTitle} ${config.DALERTS.songUrl ? ' ' + config.DALERTS.songUrl : ''}\n5 последних заказов: https://inq.page.link/clip`;
+    }
+    alertsClient.emit('media', {
+        token: config.DALERTS.token,
+        message_data: { action: 'get-current-media', source: 'last_alerts_widget' }
+    });
+    return fallback;
+}
 
 function handleBonusMode(data, bonus) {
     switch (data.action) {
@@ -586,12 +615,10 @@ function registerYoutube(client) {
         console.log('[Youtube] Hi!');
     });
 
-    client.on('updated', function () {
-        fs.writeFile(
-                `config/${client.getStreamData().key}.json`,
-                JSON.stringify(client.getCredentials()),
-                function () {}
-            );
+    client.on('credentials', function (credentials) {
+        let name = credentials.name || client.getStreamData().key;
+        fs.writeFile(`config/${name}.json`, JSON.stringify(credentials), function () {});
+        console.log(`[YouTube] Token updated for ${name}`);
     });
 
     client.on('online', function (key) {
@@ -613,7 +640,7 @@ function registerYoutube(client) {
             console.log('ignored', msg);
             return;
         }
-        console.log('[YouTube]', msg);
+        // console.log('[YouTube]', msg);
 
         questionHandler('y' + user.channelId, msg, function (answer) {
                 if (ignoreAnswer(answer)) {
@@ -753,6 +780,11 @@ function questionHandler(uuid, msg, callback) {
             if (result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
                 msg.text = result.fulfillmentMessages[result.fulfillmentMessages.length - 1].text.text[0];
             }
+
+            if (msg.intent.search('clip') !== -1) {
+                msg.text = getLastSongText(msg.text);
+            }
+
             callback(msg);
         })
         .catch(function (err) {
