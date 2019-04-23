@@ -9,10 +9,17 @@ const twitch = require('tmi.js');
 const cookie = require('cookie');
 const redis = require('redis');
 const axios = require('axios');
-const io = require('socket.io').listen(9090);
+const sio = require('socket.io').listen(9090);
+const io = require('socket.io-client');
 const fs = require('fs');
 
 const $backend = axios.create(config.API_OPTIONS);
+
+const alertsClient = io('wss://socket.donationalerts.ru:443', {
+        reconnection: true,
+        reconnectionDelayMax: 5000,
+        reconnectionDelay: 1000,
+    });
 
 const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
@@ -49,13 +56,13 @@ const youtubeClient = new Proxy(youtube, {
     });
 config.YOUTUBE.forEach(credential => youtubeClient.register(credential));
 
-let questionThrottle = {
+const questionThrottle = {
         users: {},
         limit: 5000
     };
 
-let uuidToClient = {};
-let shortidToUuid = {};
+const uuidToClient = {};
+const shortidToUuid = {};
 let botCommands = [];
 
 console.log('ChatServer is starting...');
@@ -67,18 +74,22 @@ console.log('ChatServer is starting...');
 // TODO: move regex-command for questionHandler to config
 // BUG: YouTube switching not working on bootstrap with offline stream and exceeded quota
 
-io.use(function (socket, next) {
+/**
+ * WEBSITE
+ */
+
+sio.use(function (socket, next) {
     if (socket.handshake.headers.cookie || socket.request.headers.cookie) {
         return next();
     }
     next(new Error('Authentication error'));
 });
 
-io.on('error', function (err) {
+sio.on('error', function (err) {
     console.error('[SocketError]', err);
 });
 
-io.on('connection', function (socket) {
+sio.on('connection', function (socket) {
     socket.cookie = socket.handshake.headers.cookie || socket.request.headers.cookie;
     const uuid = cookie.parse(socket.cookie).uuid;
     if (uuid == undefined) {
@@ -251,6 +262,10 @@ io.on('connection', function (socket) {
     uuidToClient[uuid] = client;
 });
 
+/**
+ * DISCORD
+ */
+
 discordClient.on('ready', function () {
     console.log('[Discord] Hi, %s!', discordClient.user.tag);
 });
@@ -286,9 +301,11 @@ discordClient.on('message', function (message) {
         return;
     }
 
-    if (msg.startsWith('!')) {
+    if (msg.search(/^[@!\/]/) !== -1) {
         questionHandler('d' + message.author.id, msg, function (answer) {
-                message.reply(answer.text);
+                if (answer.command) {
+                    message.reply(answer.text);
+                }
             });
         return;
     }
@@ -404,6 +421,10 @@ discordClient.on('error', function (err) {
     console.error('[DiscordError]', err);
 });
 
+/**
+ * TWITCH
+ */
+
 twitchClient.on('connected', function (address, port) {
     console.log('[Twitch] Hi, %s!', twitchClient.getUsername());
 });
@@ -415,7 +436,7 @@ twitchClient.on('chat', function (channel, user, message, self) {
     }
 
     questionHandler('t' + user['user-id'], msg, function (answer) {
-            if (answer.action == 'input.unknown' || (!msg.startsWith('!') && answer.intent.startsWith('smalltalk'))) {
+            if (ignoreAnswer(answer)) {
                 return;
             }
             twitchClient.say(channel, '@' + user['username'] + ' ' + answer.text);
@@ -425,6 +446,10 @@ twitchClient.on('chat', function (channel, user, message, self) {
 twitchClient.on('error', function (err) {
     console.error('[TwitchError]', err);
 });
+
+/**
+ * VKONTAKTE
+ */
 
 vkontakteClient.on('ready', function () {
     console.log('[VK] Hi!');
@@ -462,7 +487,7 @@ vkontakteClient.on('video_comment_new', function (comment) {
     }
 
     questionHandler('v' + comment.from_id, msg, function (answer) {
-            if (!msg.startsWith('!') && answer.intent.startsWith('smalltalk')) {
+            if (ignoreAnswer(answer)) {
                 return;
             }
 
@@ -480,8 +505,70 @@ vkontakteClient.on('video_comment_new', function (comment) {
 });
 
 /**
- *
+ * DONATION ALERTS
  */
+
+alertsClient.on('connect', () => {
+    alertsClient.emit('add-user', { token: config.DALERTS.token, type: 'minor' });
+    console.log('[DAlerts]', 'Connected!');
+});
+
+alertsClient.on('media', data => {
+    if (typeof data === 'string') {
+        data = JSON.parse(data);
+    }
+    if (!data || typeof data.action === 'undefined') {
+        return;
+    }
+    for (let bonus of config.DALERTS.specials) {
+        handleBonusMode(data, bonus);
+    }
+});
+
+function handleBonusMode(data, bonus) {
+    switch (data.action) {
+        case 'play':
+        case 'receive-current-media':
+            if (bonus.active || typeof data.media === 'undefined' || data.media.title.match(bonus.regex) === null) {
+                break;
+            }
+            const msgString = choose(config.DALERTS.messages);
+            const msg = {};
+            for (let key in bonus.message) {
+                msg[key] = msgString;
+            }
+            console.log('[DAlerts]', 'Bonus activated!');
+            broadcastMessage(msg);
+            bonus.active = true;
+        case 'unpause':
+            if (bonus.active && bonus.timeout == null) {
+                bonus.timeout = setTimeout(bonusWorker, 8000, bonus);
+            }
+            break;
+
+        case 'end':
+        case 'skip':
+        case 'stop':
+            bonus.active = false;
+        case 'pause':
+            if (bonus.timeout != null) {
+                console.log('[DAlerts]', 'Bonus', data.action);
+                clearTimeout(bonus.timeout);
+                bonus.timeout = null;
+            }
+            break;
+    }
+}
+
+function bonusWorker(bonus) {
+    broadcastMessage(bonus.message);
+    bonus.timeout = setTimeout(bonusWorker, 8000 + Math.random() * 7000, bonus);
+}
+
+/**
+ * YOUTUBE
+ */
+
 function registerYoutube(client) {
     client.on('login', function () {
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -523,11 +610,13 @@ function registerYoutube(client) {
         const msg = message.displayMessage.trim();
 
         if (user.displayName.match(config.IGNORE)) {
+            console.log('ignored', msg);
             return;
         }
+        console.log('[YouTube]', msg);
 
         questionHandler('y' + user.channelId, msg, function (answer) {
-                if (answer.action == 'input.unknown' || (!msg.startsWith('!') && answer.intent.startsWith('smalltalk'))) {
+                if (ignoreAnswer(answer)) {
                     return;
                 }
                 client.sendMessage(('@' + user.displayName + ' ' + answer.text).substr(0, 199))
@@ -594,6 +683,7 @@ function updateCommands(isLooped=true) {
  */
 function questionHandler(uuid, msg, callback) {
     let tokens = null;
+    let isCommand = false;
 
     for (let cmd of botCommands) {
         if ((tokens = msg.match(cmd.regex)) !== null) {
@@ -603,9 +693,11 @@ function questionHandler(uuid, msg, callback) {
                         text: tokens[tokens.length - 1].trim(),
                         intent: 'cmd',
                         action: 'cmd',
+                        command: true,
                     });
                 return true;
             }
+            isCommand = true;
             break;
         }
     }
@@ -622,12 +714,13 @@ function questionHandler(uuid, msg, callback) {
         return false;
     }
 
-    if (msg.startsWith('!') && message.length < 2) {
+    if (msg.search(/^[!\/]/) !== -1 && message.length < 2) {
         updateCommands(false);
         callback({
                 text: `Есть вопрос? Напиши в чате ${(msg.match(/^![^\s]+/i) || ['!bot'])[0]} ТВОЙ_ВОПРОС`,
                 intent: 'cmd',
                 action: 'cmd',
+                command: isCommand,
             });
         return true;
     }
@@ -654,19 +747,43 @@ function questionHandler(uuid, msg, callback) {
                     text: result.fulfillmentText,
                     action: result.action,
                     intent: result.intent.displayName,
+                    command: isCommand,
                 };
 
-            if (!result.fulfillmentMessages || result.fulfillmentMessages.length == 0) {
-                callback(msg);
-                return;
+            if (result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
+                msg.text = result.fulfillmentMessages[result.fulfillmentMessages.length - 1].text.text[0];
             }
-            msg.text = result.fulfillmentMessages[result.fulfillmentMessages.length - 1].text.text[0];
             callback(msg);
         })
         .catch(function (err) {
             console.error('[DialogError]', err);
         });
     return true;
+}
+
+function broadcastMessage(message) {
+    let msg = '';
+    if (message.twitch) {
+        msg = typeof message.twitch === 'function' ? message.twitch() : message.twitch;
+        twitchClient.say(config.TWITCH.channels[0], msg);
+    }
+    if (message.youtube && youtubeClient.getStreamData().isOnline) {
+        msg = typeof message.youtube === 'function' ? message.youtube() : message.youtube;
+        youtubeClient.sendMessage(msg.substr(0, 199))
+            .catch(function (err) {
+                console.error(err.response.data);
+            });
+    }
+}
+
+function ignoreAnswer(answer) {
+    return answer.action == 'input.unknown'
+        || answer.intent.startsWith('smalltalk')
+        || (!answer.command && answer.intent.startsWith('private'));
+}
+
+function choose(choices) {
+    return choices[ Math.floor(Math.random() * choices.length) ];
 }
 
 updateCommands();
