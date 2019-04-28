@@ -622,22 +622,22 @@ function registerYoutube(client) {
     });
 
     client.on('online', function (key) {
-        console.log(`[YouTube] Stream connected, ${key}.`);
+        console.log(`[YouTube] Stream connected, ${key}`);
     });
 
     client.on('offline', function (key) {
-        console.log(`[YouTube] Stream disconnected, ${key}.`);
+        console.log(`[YouTube] Stream disconnected, ${key}`);
     });
 
     client.on('stopped', function (key) {
-        console.log(`[YouTube] Client stopped, ${key}.`);
+        console.log(`[YouTube] Client stopped, ${key}`);
     });
 
     client.on('message', function (message, user) {
         const msg = message.displayMessage.trim();
 
         if (user.displayName.match(config.IGNORE)) {
-            console.log('ignored', msg);
+            // console.log('ignored', msg);
             return;
         }
         // console.log('[YouTube]', msg);
@@ -660,8 +660,7 @@ function registerYoutube(client) {
                 return;
             }
             if (err.response.data.error.code == 403) {
-                youtubeClient.next();
-                return;
+                setTimeout(youtubeClient.next.bind(youtubeClient), 2000);
             }
             if (err.response.data.error.message) {
                 console.error('[YouTubeError]', err.response.data.error.message);

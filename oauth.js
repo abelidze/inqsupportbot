@@ -39,6 +39,14 @@ class OAuth2 extends EventEmitter {
         return `${this[urlsOAuth].base}${this[urlsOAuth].authorizate}?response_type=code&client_id=${this[credentialsOAuth].clientId}&redirect_uri=${this[credentialsOAuth].redirectUrl}&scope=${this[credentialsOAuth].scopes}`;
     }
 
+    updateCredentials(cred) {
+        this[credentialsOAuth].name = cred.name;
+        this[credentialsOAuth].accessToken = cred.accessToken;
+        this[credentialsOAuth].refreshToken = cred.refreshToken;
+        this[credentialsOAuth].expiresIn = cred.expiresIn;
+        this[credentialsOAuth].expiresTime = cred.expiresTime;
+    }
+
     getCredentials() {
         return {
             name: this[credentialsOAuth].name,

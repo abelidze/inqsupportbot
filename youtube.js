@@ -9,7 +9,6 @@ const resetStreamData = Symbol('resetStreamData');
 const processMessages = Symbol('processMessages');
 const chatPolling = Symbol('chatPolling');
 const runMaster = Symbol('runMaster');
-const getIdProvider = Symbol('getIdProvider');
 const MANUAL = Symbol('MANUAL');
 const SEARCH = Symbol('SEARCH');
 const PLAYLIST = Symbol('PLAYLIST');
@@ -32,14 +31,22 @@ class Youtube extends OAuth2 {
             channelId: params.channelId || null,
             playlistId: params.playlistId || null,
             ownerCredentials: null,
-            idProvider: this[getIdProvider](params),
             autoSearch: params.autoSearch && true,
             isOnline: false,
             pageToken: '',
         };
 
         if (params.ownerCredentials) {
-            this[streamData].ownerCredentials = new OAuth2(params.ownerCredentials, 'https://accounts.google.com/o/oauth2/', 'auth');
+            if (typeof params.ownerCredentials == 'function') {
+                params.ownerCredentials = params.ownerCredentials();
+                this[streamData].ownerCredentialsUpdater = params.ownerCredentials;
+            }
+            this[streamData].ownerCredentials = new OAuth2(
+                    params.ownerCredentials,
+                    'https://accounts.google.com/o/oauth2/',
+                    'auth'
+                );
+            this[streamData].ownerCredentials.on('credentials', (c => { this.emit('credentials', c); }).bind(this));
         }
 
         this[urlsYoutube] = {
@@ -66,10 +73,15 @@ class Youtube extends OAuth2 {
 
     login(code) {
         let self = this;
+
+        if (typeof self[streamData].ownerCredentialsUpdater == 'function') {
+            self[streamData].updateCredentials( self[streamData].ownerCredentialsUpdater() );
+        }
+
         if (code) {
             self.connect(code)
                 .then(function () {
-                    self[timers].master = setTimeout(self[runMaster].bind(self), 10, true);
+                    self[timers].master = setTimeout(self[runMaster].bind(self), 100, true);
                     self.emit('ready');
                 })
                 .catch(function (err) {
@@ -78,7 +90,7 @@ class Youtube extends OAuth2 {
         } else if (self.getCredentials().refreshToken) {
             self.check()
                 .then(function () {
-                    self[timers].master = setTimeout(self[runMaster].bind(self), 10, true);
+                    self[timers].master = setTimeout(self[runMaster].bind(self), 100, true);
                     self.emit('ready');
                 })
                 .catch(function (err) {
@@ -165,8 +177,46 @@ class Youtube extends OAuth2 {
     }
 
     async searchStream() {
+        let self = this;
         console.log('[YouTube]', 'Searching stream...');
-        return await this[ this[streamData].idProvider ]();
+        return await new Promise(async function (resolve, reject) {
+                if (self[streamData].ownerCredentials) {
+                    try {
+                        await self[BROADCAST]();
+                        return resolve();
+                    } catch (err) {
+                        if (err.response && err.response.data.error.code == 403) {
+                            return reject(err);
+                        }
+                        self.emit('error', err);
+                    }
+                }
+
+                if (self[streamData].playlistId) {
+                    try {
+                        await self[PLAYLIST]();
+                        return resolve();
+                    } catch (err) {
+                        if (err.response && err.response.data.error.code == 403) {
+                            return reject(err);
+                        }
+                        self.emit('error', err);
+                    }
+                }
+
+                if (self[streamData].channelId) {
+                    try {
+                        await self[SEARCH]();
+                        return resolve();
+                    } catch (err) {
+                        if (err.response && err.response.data.error.code == 403) {
+                            return reject(err);
+                        }
+                        self.emit('error', err);
+                    }
+                }
+                return reject(new Error('No video_id provider is available'));
+            });
     }
 
     async searchChat() {
@@ -217,28 +267,10 @@ class Youtube extends OAuth2 {
     }
 
     [resetStreamData]() {
-        if (this[streamData].idProvider !== MANUAL) {
-            this[streamData].liveId = null;
-        }
+        this[streamData].liveId = null;
         this[streamData].chatId = null;
         this[streamData].pageToken = null;
         this[streamData].isOnline = false;
-    }
-
-    [getIdProvider](config = {}) {
-        if (config.ownerCredentials) {
-            return BROADCAST;
-        }
-        if (config.liveId) {
-            return MANUAL;
-        }
-        if (config.playlistId) {
-            return PLAYLIST;
-        }
-        if (config.channelId) {
-            return SEARCH;
-        }
-        throw new Error('No video_id provider is available');
     }
 
     async [runMaster](bootstrap = false, raise = false) {
@@ -371,14 +403,18 @@ class Youtube extends OAuth2 {
             this[streamData].liveId = result.items[0].id;
             this[streamData].chatId = result.items[0].snippet.liveChatId;
         } else {
+            this[streamData].liveId = null;
+            this[streamData].chatId = null;
             console.log('[YouTube]', 'liveStream not found via BROADCAST');
         }
 
         return result;  
     }
 
-    async [postYoutube](url, params, data, oauth) {
-        oauth = oauth || this;
+    async [postYoutube](url, params, data, oauth = null) {
+        if (oauth === null) {
+            oauth = this;
+        }
         await oauth.check();
 
         let result = await this.axiosYoutube({
@@ -392,8 +428,10 @@ class Youtube extends OAuth2 {
         return result.data;
     }
 
-    async [getYoutube](url, params, oauth) {
-        oauth = oauth || this;
+    async [getYoutube](url, params, oauth = null) {
+        if (oauth === null) {
+            oauth = this;
+        }
         await oauth.check();
 
         let result = await this.axiosYoutube({
