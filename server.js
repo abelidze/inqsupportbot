@@ -21,6 +21,7 @@ const alertsClient = io('wss://socket.donationalerts.ru:443', {
         reconnectionDelay: 1000,
     });
 
+const redisClient = redis.createClient({ host: config.REDIS_HOST, port: config.REDIS_PORT });
 const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
 const twitchClient = new twitch.client(config.TWITCH);
@@ -258,6 +259,29 @@ sio.on('connection', function (socket) {
     });
 
     uuidToClient[uuid] = client;
+});
+
+/**
+ * REDIS
+ */
+
+redisClient.on('message', function (channel, payload) {
+    if (channel !== 'control') {
+        return
+    }
+
+    switch (payload) {
+        case 'reboot':
+            process.exit();
+            break;
+
+        default:
+            return;
+    }
+});
+
+redisClient.on('error', function (err) {
+    console.error('[RedisError] ', err);
 });
 
 /**
@@ -818,6 +842,7 @@ function choose(choices) {
 }
 
 updateCommands();
+redisClient.subscribe('control');
 twitchClient.connect();
 discordClient.login(config.DISCORD_TOKEN);
 youtubeClient.login();
