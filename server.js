@@ -26,36 +26,37 @@ const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
 const twitchClient = new twitch.client(config.TWITCH);
 const vkontakteClient = new vkbot.client(config.VKBOT);
-const youtubeClient = new Proxy(youtube, {
-        clients: [],
-        cursor: {
-            index: 0
-        },
-        register(params) {
-            this.clients.push( registerYoutube(new this.client(params)) );
-        },
-        next() {
-            this.clients[this.cursor.index].stop();
-            if (++this.cursor.index >= this.clients.length) {
-                this.cursor.index = 0;
-            }
-            console.log(`[YouTube] Switch to ${this.clients[this.cursor.index].getStreamData().key}`);
-            this.clients[this.cursor.index].login();
-        },
-        get(obj, key) {
-            if (this[key] !== undefined) {
-                return this[key];
-            }
-            if (this.clients.length > this.cursor.index && this.clients[this.cursor.index][key] !== undefined) {
-                return this.clients[this.cursor.index][key];
-            }
-            if (obj[key] !== undefined) {
-                return obj[key];
-            }
-            throw new Error(`[ProxyError] call to unknown method '${key}'`);
-        }
-    });
-config.YOUTUBE.forEach(credential => youtubeClient.register(credential));
+const youtubeClient = new youtube.client(config.YOUTUBE);
+// const youtubeClient = new Proxy(youtube, {
+//         clients: [],
+//         cursor: {
+//             index: 0
+//         },
+//         register(params) {
+//             this.clients.push( registerYoutube(new this.client(params)) );
+//         },
+//         next() {
+//             this.clients[this.cursor.index].stop();
+//             if (++this.cursor.index >= this.clients.length) {
+//                 this.cursor.index = 0;
+//             }
+//             console.log(`[YouTube] Switch to ${this.clients[this.cursor.index].getStreamData().key}`);
+//             this.clients[this.cursor.index].login();
+//         },
+//         get(obj, key) {
+//             if (this[key] !== undefined) {
+//                 return this[key];
+//             }
+//             if (this.clients.length > this.cursor.index && this.clients[this.cursor.index][key] !== undefined) {
+//                 return this.clients[this.cursor.index][key];
+//             }
+//             if (obj[key] !== undefined) {
+//                 return obj[key];
+//             }
+//             throw new Error(`[ProxyError] call to unknown method '${key}'`);
+//         }
+//     });
+// config.YOUTUBE.forEach(credential => youtubeClient.register(credential));
 
 const questionThrottle = {
         users: {},
@@ -303,15 +304,10 @@ discordClient.on('message', function (message) {
                     }
                 })
                 .catch(function (err) {
-                    if (err.response) {
-                        if (err.response.data.error.code == 403) {
-                            setTimeout(youtubeClient.next.bind(youtubeClient), 3000);
-                            return;
-                        } else {
-                            console.error('[YouTubeError]', err.response.data.error);
-                        }
+                    if (err.response && err.response.data) {
+                        console.error('[DiscordYouTubeError]', err.response.data.error);
                     } else {
-                        console.error('[YouTubeError]', err);
+                        console.error('[DiscordYouTubeError]', err);
                     }
                     message.reply('YouTube-API отклонило запрос!');
                 });
@@ -622,80 +618,75 @@ function bonusWorker(bonus) {
  * YOUTUBE
  */
 
-function registerYoutube(client) {
-    client.on('login', function () {
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+youtubeClient.on('login', function () {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-        rl.question(
-            '[Youtube] OAuth url: ' + this.authorizationUrl() + '\n',
-            function (code) {
-                client.login(code);
-                rl.close();
-            });
-        console.log('[Youtube] Enter your code: ');
-    });
+    rl.question(
+        '[Youtube] OAuth url: ' + this.authorizationUrl() + '\n',
+        function (code) {
+            youtubeClient.login(code);
+            rl.close();
+        });
+    console.log('[Youtube] Enter your code: ');
+});
 
-    client.on('ready', function () {
-        console.log('[Youtube] Hi!');
-    });
+youtubeClient.on('ready', function () {
+    console.log('[Youtube] Hi!');
+});
 
-    client.on('credentials', function (credentials) {
-        let name = credentials.name || client.getStreamData().key;
-        fs.writeFile(`config/${name}.json`, JSON.stringify(credentials), function () {});
-        console.log(`[YouTube] Token updated for ${name}`);
-    });
+youtubeClient.on('credentials', function (credentials) {
+    let name = credentials.name || youtubeClient.getStreamData().key;
+    fs.writeFile(`config/${name}.json`, JSON.stringify(credentials), function () {});
+    console.log(`[YouTube] Token updated for ${name}`);
+});
 
-    client.on('online', function (key) {
-        console.log(`[YouTube] Stream connected, ${key}`);
-    });
+youtubeClient.on('online', function (key) {
+    console.log(`[YouTube] Stream connected, ${key}`);
+});
 
-    client.on('offline', function (key) {
-        console.log(`[YouTube] Stream disconnected, ${key}`);
-    });
+youtubeClient.on('offline', function (key) {
+    console.log(`[YouTube] Stream disconnected, ${key}`);
+});
 
-    client.on('stopped', function (key) {
-        console.log(`[YouTube] Client stopped, ${key}`);
-    });
+youtubeClient.on('stopped', function (key) {
+    console.log(`[YouTube] Client stopped, ${key}`);
+});
 
-    client.on('message', function (message, user) {
-        const msg = message.displayMessage.trim();
+youtubeClient.on('message', function (message, user) {
+    const msg = message.displayMessage.trim();
 
-        if (user.displayName.match(config.IGNORE)) {
-            // console.log('ignored', msg);
+    if (user.displayName.match(config.IGNORE)) {
+        // console.log('ignored', msg);
+        return;
+    }
+    // console.log('[YouTube]', msg);
+
+    questionHandler('y' + user.channelId, msg, function (answer) {
+            if (ignoreAnswer(answer)) {
+                return;
+            }
+            youtubeClient.sendMessage(('@' + user.displayName + ' ' + answer.text).substr(0, 199))
+                .catch(function (err) {
+                    console.error(err.response.data);
+                });
+        });
+});
+
+youtubeClient.on('error', function (err) {
+    if (err.response && err.response.data) {
+        if (!err.response.data.error) {
+            console.error('[YouTubeError]', err.response.data);
             return;
         }
-        // console.log('[YouTube]', msg);
-
-        questionHandler('y' + user.channelId, msg, function (answer) {
-                if (ignoreAnswer(answer)) {
-                    return;
-                }
-                client.sendMessage(('@' + user.displayName + ' ' + answer.text).substr(0, 199))
-                    .catch(function (err) {
-                        console.error(err.response.data);
-                    });
-            });
-    });
-
-    client.on('error', function (err) {
-        if (err.response && err.response.data) {
-            if (!err.response.data.error) {
-                console.error('[YouTubeError]', err.response.data);
-                return;
-            }
-            if (err.response.data.error.code == 403) {
-                setTimeout(youtubeClient.next.bind(youtubeClient), 2000);
-            }
-            if (err.response.data.error.message) {
-                console.error('[YouTubeError]', err.response.data.error.message);
-                return;
-            }
+        // if (err.response.data.error.code == 403) --> quota exceeded
+        if (err.response.data.error.message) {
+            console.error('[YouTubeError]', err.response.data.error.message);
+            return;
         }
-        console.error('[YouTubeError]', err);
-    });
+    }
+    console.error('[YouTubeError]', err);
+});
 
-    return client;
-}
 
 function updateCommands(isLooped=true) {
     $backend.get('/api/commands')
