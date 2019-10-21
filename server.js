@@ -46,11 +46,9 @@ const youtubeClient = new youtube.client(config.YOUTUBE);
 //         get(obj, key) {
 //             if (this[key] !== undefined) {
 //                 return this[key];
-//             }
-//             if (this.clients.length > this.cursor.index && this.clients[this.cursor.index][key] !== undefined) {
+//             } else if (this.clients.length > this.cursor.index && this.clients[this.cursor.index][key] !== undefined) {
 //                 return this.clients[this.cursor.index][key];
-//             }
-//             if (obj[key] !== undefined) {
+//             } else if (obj[key] !== undefined) {
 //                 return obj[key];
 //             }
 //             throw new Error(`[ProxyError] call to unknown method '${key}'`);
