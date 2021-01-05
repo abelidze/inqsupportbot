@@ -7,7 +7,7 @@
     "main": "server.js",
     "devDependencies": {},
     "dependencies": {
-        "axios": "^0.18.1",
+        "axios": "^0.21.1",
         "cookie": "^0.3.1",
         "dialogflow": "^0.8.0",
         "discord.js": "^11.4.2",
