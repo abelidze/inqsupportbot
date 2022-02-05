@@ -15,7 +15,7 @@ const fs = require('fs');
 
 const $backend = axios.create(config.API_OPTIONS);
 
-const alertsClient = io('wss://socket.donationalerts.ru:443', {
+const alertsClient = io('wss://socket9.donationalerts.ru:443', {
         reconnection: true,
         reconnectionDelayMax: 5000,
         reconnectionDelay: 1000,
