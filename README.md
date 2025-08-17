@@ -1,5 +1,5 @@
 About InqSupportBot
-==================
+===================
 
 InqSupportBot is a chatbot integrated with dialogflow as backend and discord / twitch / socket.io (for website) as frontend.
 
@@ -59,7 +59,7 @@ You can find more information on how to do it [here](https://cloud.google.com/ia
 2. After retriving .json service account key make configuration module: `mkdir config && touch index.js`
 And place your `<ACCOUNT_KEY_FILENAME>.json` to `config`.
 3. Fill `index.js` with:
-```
+```js
 const path = require('path')
 
 process.env.GOOGLE_APPLICATION_CREDENTIALS = path.resolve(path.join(__dirname, '<ACCOUNT_KEY_FILENAME>.json'));

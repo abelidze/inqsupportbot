@@ -2,7 +2,6 @@ const config = require('./config');
 const shortid = require('shortid');
 const readline = require('readline');
 const dialogflow = require('dialogflow');
-const vkbot = require('./vkbot');
 const youtube = require('./youtube');
 const discord = require('discord.js');
 const twitch = require('tmi.js');
@@ -21,40 +20,11 @@ const alertsClient = io('wss://socket9.donationalerts.ru:443', {
         reconnectionDelay: 1000,
     });
 
-const redisClient = redis.createClient({ host: config.REDIS_HOST, port: config.REDIS_PORT });
+const redisClient = redis.createClient({ host: config.REDIS_HOST, port: config.REDIS_PORT, password: config.REDIS_PASS });
 const dialogClient = new dialogflow.SessionsClient();
 const discordClient = new discord.Client();
 const twitchClient = new twitch.client(config.TWITCH);
-const vkontakteClient = new vkbot.client(config.VKBOT);
 const youtubeClient = new youtube.client(config.YOUTUBE);
-// const youtubeClient = new Proxy(youtube, {
-//         clients: [],
-//         cursor: {
-//             index: 0
-//         },
-//         register(params) {
-//             this.clients.push( registerYoutube(new this.client(params)) );
-//         },
-//         next() {
-//             this.clients[this.cursor.index].stop();
-//             if (++this.cursor.index >= this.clients.length) {
-//                 this.cursor.index = 0;
-//             }
-//             console.log(`[YouTube] Switch to ${this.clients[this.cursor.index].getStreamData().key}`);
-//             this.clients[this.cursor.index].login();
-//         },
-//         get(obj, key) {
-//             if (this[key] !== undefined) {
-//                 return this[key];
-//             } else if (this.clients.length > this.cursor.index && this.clients[this.cursor.index][key] !== undefined) {
-//                 return this.clients[this.cursor.index][key];
-//             } else if (obj[key] !== undefined) {
-//                 return obj[key];
-//             }
-//             throw new Error(`[ProxyError] call to unknown method '${key}'`);
-//         }
-//     });
-// config.YOUTUBE.forEach(credential => youtubeClient.register(credential));
 
 const questionThrottle = {
         users: {},
@@ -464,63 +434,6 @@ twitchClient.on('error', function (err) {
 });
 
 /**
- * VKONTAKTE
- */
-
-vkontakteClient.on('ready', function () {
-    console.log('[VK] Hi!');
-});
-
-vkontakteClient.on('error', function (err) {
-    console.error('[VKError]', err);
-});
-
-vkontakteClient.on('message_new', function (message) {
-    const msg = message.text.trim();
-    if (!msg) {
-        return;
-    }
-
-    questionHandler('v' + message.from_id, msg.trim(), function (answer) {
-            vkontakteClient.call(
-                'messages.send',
-                Object.assign(
-                    message.from_id < 2000000000
-                    ? { user_ids: (Array.isArray(message.from_id) ? message.from_id : [message.from_id]).join(',') }
-                    : { peer_id: message.from_id },
-                    { message: answer.text }
-                ),
-                vkontakteClient.getSettings().groupToken
-            );
-        });
-});
-
-vkontakteClient.on('video_comment_new', function (comment) {
-    const msg = comment.text.trim();
-    const groupId = -vkontakteClient.getSettings().groupId;
-    if (comment.from_id == groupId) {
-        return;
-    }
-
-    questionHandler('v' + comment.from_id, msg, function (answer) {
-            if (ignoreAnswer(answer)) {
-                return;
-            }
-
-            vkontakteClient.call(
-                'video.createComment',
-                {
-                    from_group: 1,
-                    owner_id: comment.video_owner_id,
-                    video_id: comment.video_id,
-                    message: answer.text,
-                    reply_to_comment: comment.id
-                }
-            );
-        });
-});
-
-/**
  * DONATION ALERTS
  */
 
@@ -835,4 +748,3 @@ redisClient.subscribe('control');
 twitchClient.connect();
 discordClient.login(config.DISCORD_TOKEN);
 youtubeClient.login();
-vkontakteClient.login();
