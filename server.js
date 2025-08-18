@@ -8,6 +8,7 @@ const twitch = require('tmi.js');
 const cookie = require('cookie');
 const redis = require('redis');
 const axios = require('axios');
+const OpenAI = require("openai");
 const sio = require('socket.io').listen(9090);
 const io = require('socket.io-client');
 const fs = require('fs');
@@ -22,9 +23,24 @@ const alertsClient = io('wss://socket9.donationalerts.ru:443', {
 
 const redisClient = redis.createClient({ host: config.REDIS_HOST, port: config.REDIS_PORT, password: config.REDIS_PASS });
 const dialogClient = new dialogflow.SessionsClient();
-const discordClient = new discord.Client();
+const discordClient = new discord.Client({
+    intents: [
+        discord.GatewayIntentBits.Guilds,
+        discord.GatewayIntentBits.GuildMessages,
+        discord.GatewayIntentBits.GuildMessageReactions,
+        discord.GatewayIntentBits.MessageContent,
+        discord.GatewayIntentBits.DirectMessages,
+        discord.GatewayIntentBits.DirectMessageTyping
+    ],
+    partials: [
+        discord.Partials.Message,
+        discord.Partials.Channel,
+        discord.Partials.Reaction
+    ]
+});
 const twitchClient = new twitch.client(config.TWITCH);
 const youtubeClient = new youtube.client(config.YOUTUBE);
+const brainClient = new OpenAI({ apiKey: OPENAI_KEY });
 
 const questionThrottle = {
         users: {},
@@ -34,6 +50,7 @@ const questionThrottle = {
 const uuidToClient = {};
 const shortidToUuid = {};
 let botCommands = [];
+let chatHistory = [];
 
 // TODO: refactor for ES6+
 // TODO: OOP is really needed
@@ -257,13 +274,14 @@ redisClient.on('error', function (err) {
  * DISCORD
  */
 
-discordClient.on('ready', function () {
+discordClient.on(discord.Events.ClientReady, function () {
     console.log('[Discord] Hi, %s!', discordClient.user.tag);
 });
 
-discordClient.on('message', function (message) {
+discordClient.on(discord.Events.MessageCreate, function (message) {
     const msg = message.cleanContent.trim();
-    if (message.member && message.member.hasPermission('ADMINISTRATOR') && msg.match(config.YOUTUBE_TRIGGER)) {
+    if (message.member && message.member.permissions.has('ADMINISTRATOR') && msg.match(config.YOUTUBE_TRIGGER)) {
+        chatHistory = [];
         setTimeout(function () {
             youtubeClient.runImmediate()
                 .then(function () {
@@ -403,7 +421,7 @@ discordClient.on('message', function (message) {
     }
 });
 
-discordClient.on('error', function (err) {
+discordClient.on(discord.Events.Error, function (err) {
     console.error('[DiscordError]', err);
 });
 
@@ -626,6 +644,13 @@ function updateCommands(isLooped=true) {
     }
 }
 
+function rememberMessage(username, message) {
+    if (chatHistory.length > 5) {
+        chatHistory.splice(1);
+    }
+    chatHistory.push({ role: 'user', content: `@${username}: ${message}` });
+}
+
 /**
  * Handle message and get intent from dialogflow
  *
@@ -663,6 +688,7 @@ function questionHandler(uuid, msg, callback) {
     const timestamp = Date.now();
     const throttle = questionThrottle.users[uuid];
     if (throttle && timestamp - throttle < questionThrottle.limit) {
+        rememberMessage(uuid, message);
         return false;
     }
 
@@ -681,7 +707,34 @@ function questionHandler(uuid, msg, callback) {
         return false;
     }
 
-    questionThrottle.users[uuid] = timestamp;
+    rememberMessage(uuid, message);
+    if (questionThrottle.users[uuid] === undefined) {
+        chatHistory.unshift({ role: 'developer', content: config.BOT_CONTEXT });
+        questionThrottle.users[uuid] = { throttle: timestamp };
+    } else {
+        questionThrottle.users[uuid].throttle = timestamp;
+    }
+
+    brainClient.responses.create({
+        model: "gpt-5-nano",
+        previous_response_id: questionThrottle.users[uuid].response,
+        input: chatHistory,
+        store: true,
+    }).then(response => {
+        if (response.output_text.trim().length == 0) {
+            return;
+        }
+        questionThrottle.users[uuid].response = response.id;
+        let msg = {
+                text: response.output_text,
+                action: 'cmd',
+                intent: 'cmd',
+                command: isCommand,
+            };
+        callback(msg);
+    }).catch(error => console.log(error));
+    chatHistory = [];
+    return true;
 
     dialogClient
         .detectIntent({
