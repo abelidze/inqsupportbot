@@ -9,6 +9,7 @@ const cookie = require('cookie');
 const redis = require('redis');
 const axios = require('axios');
 const OpenAI = require('openai');
+const http = require('https-proxy-agent');
 const sio = require('socket.io').listen(9090);
 const io = require('socket.io-client');
 const fs = require('fs');
@@ -21,7 +22,11 @@ const alertsClient = io('wss://socket9.donationalerts.ru:443', {
         reconnectionDelay: 1000,
     });
 
-const brainClient = new OpenAI({ apiKey: config.GROK_KEY, baseURL: config.GROK_URL });
+const brainClient = new OpenAI({
+    apiKey: config.GROK_KEY,
+    baseURL: config.GROK_URL,
+    httpAgent: new http.HttpsProxyAgent(config.BOT_PROXY),
+});
 const redisClient = redis.createClient({
     host: config.REDIS_HOST,
     port: config.REDIS_PORT,
@@ -50,7 +55,7 @@ const youtubeClient = new youtube.client(config.YOUTUBE);
 const questionThrottle = {
         users: {},
         limit: 5000,
-        memory: 2,
+        memory: 20,
     };
 
 const uuidToClient = {};
@@ -317,7 +322,7 @@ discordClient.on(discord.Events.MessageCreate, function (message) {
     }
 
     if (msg.search(/^[@!\/]/) !== -1) {
-        questionHandler('discord', 'd' + message.author.id, message.author.username, msg, function (answer) {
+        questionHandler('cepreu_inq', 'd' + message.author.id, message.author.username, msg, function (answer) {
                 if (answer.command) {
                     message.reply(answer.text);
                 }
@@ -601,7 +606,7 @@ youtubeClient.on('message', function (message, user) {
     }
     // console.log('[YouTube]', msg);
 
-    questionHandler('youtube', 'y' + user.channelId, user.displayName, msg, function (answer) {
+    questionHandler('cepreu_inq', 'y' + user.channelId, user.displayName, msg, function (answer) {
             if (ignoreAnswer(answer)) {
                 return;
             }
@@ -648,11 +653,12 @@ async function getStreamData(clientId, token, streamer) {
         const response = await axios.get(`https://api.twitch.tv/helix/streams?user_login=${streamer}`, {
             headers: { 'Client-ID': clientId, 'Authorization': `Bearer ${token}` }
         });
+        const bot = config.BOT_NAME;
         const game = response.data.data[0]?.game_name || 'Just Chatting';
         const username = response.data.data[0]?.user_name || streamer;
         const title = response.data.data[0]?.title || 'Offline or no title';
         const viewers = response.data.data[0]?.viewer_count || 0;
-        return { streamer, username, game, title, viewers };
+        return { bot, streamer, username, game, title, viewers };
     } catch (error) {
         console.error('[Stream Error]', error.response?.data || error.message);
         throw error;
@@ -687,7 +693,7 @@ async function updateData(isLooped=true) {
     for (const channel of channels) {
         try {
             streamerData[channel] = await getStreamData(config.TWITCH_CLIENT_ID, token, channel);
-            streamerData[channel].personal = config.TWITCH.personal[channel] || '';
+            streamerData[channel].bio = config.TWITCH.bio[channel] || '';
             streamerData[channel].age = typeof config.TWITCH.ages[channel] === 'number'
                 ? ~~((Date.now() - config.TWITCH.ages[channel]) / (31557600000))
                 : config.TWITCH.ages[channel] || '?';
@@ -713,7 +719,7 @@ function template(source, tags) {
 }
 
 function aichatCreate(channel, summary) {
-    const chat = { size: 0, data: [{ role: config.BOT_SYSTEM, content: template(config.BOT_CONTEXT, streamerData[channel]) }] };
+    const chat = { pending: true, size: 0, data: [{ role: config.BOT_SYSTEM, content: template(config.BOT_CONTEXT, streamerData[channel]) }] };
     if (summary !== undefined) {
         chat.data.push({ role: 'assistant', content: `@InqSupportBot: ${summary}` });
     }
@@ -721,15 +727,52 @@ function aichatCreate(channel, summary) {
 }
 
 function aichatMessage(chat, username, message) {
-    if (chat.data.length > 12 * 2 + 1) {
+    if (chat.data.length > questionThrottle.memory / 2 + 1) {
         chat.data.splice(1, 2);
     }
     if (username == config.BOT_SYSTEM) {
         chat.data.push({ role: config.BOT_SYSTEM, content: message });
     } else {
-        chat.data.push({ role: 'user', content: `@${username}: ${message}` });
+        chat.data.push({ role: username == config.BOT_NAME ? 'assistant' : 'user', content: `@${username}: ${message}` });
     }
+    chat.pending = true;
     chat.size += 1;
+}
+
+function callBrain(channel, uuid, callback) {
+    if (!questionThrottle.users[uuid].chat.pending) {
+        return;
+    }
+    questionThrottle.users[uuid].chat.pending = false;
+    brainClient.chat.completions.create({
+        model: config.GROK_MODEL,
+        search_parameters: { mode: 'off' },
+        messages: questionThrottle.users[uuid].chat.data,
+    }).then(response => {
+        const output = response.choices[0].message.content.trim();
+        if (output.length == 0 || output.indexOf('[IDK]') !== -1) {
+            const data = questionThrottle.users[uuid].chat.data;
+            console.log(`[OpenAI] ${channel}: ${output} | ${data[data.length - 1].content}`);
+            return;
+        }
+        if (output.length > 400 || questionThrottle.users[uuid].chat.size > questionThrottle.memory) {
+            console.log(`[OpenAI] ${channel}: MEMOIZE`)
+            aichatMessage(questionThrottle.users[uuid].chat, config.BOT_SYSTEM, 'Суммаризируй текущий диалог в компактном виде. Твой ответ будет использоваться как контекст в следующем диалоге.');
+            brainClient.chat.completions.create({
+                model: config.GROK_MODEL,
+                messages: questionThrottle.users[uuid].chat.data,
+            }).then(answer => questionThrottle.users[uuid].chat = aichatCreate(channel, answer.choices[0].message.content)
+            ).catch(error => console.log(error));
+        }
+        aichatMessage(questionThrottle.users[uuid].chat, config.BOT_NAME, output);
+        let msg = {
+                text: output,
+                action: 'cmd',
+                intent: 'cmd',
+                command: true,
+            };
+        callback(msg);
+    }).catch(error => console.log(error));
 }
 
 /**
@@ -760,15 +803,21 @@ function questionHandler(channel, uuid, username, msg, callback) {
         }
     }
 
-    tokens = tokens || msg.match(config.REGEX);
+    const timestamp = Date.now();
+    if (questionThrottle.users[uuid] === undefined) {
+        questionThrottle.users[uuid] = { throttle: timestamp - questionThrottle.limit * 2, chat: aichatCreate(channel) };
+    }
+    const userdata = questionThrottle.users[uuid];
+
+    tokens = tokens || (msg.match(config.REGEX) ? [ msg ] : null);
     if (tokens == null) {
+        aichatMessage(userdata.chat, username, msg);
         return false;
     }
 
     const message = tokens[tokens.length - 1].trim();
-    const timestamp = Date.now();
-    const userdata = questionThrottle.users[uuid];
-    if (userdata && timestamp - userdata.throttle < questionThrottle.limit) {
+    if (timestamp - userdata.throttle < questionThrottle.limit) {
+        setTimeout(() => callBrain(channel, uuid, callback), timestamp - userdata.throttle + 500);
         aichatMessage(userdata.chat, username, message);
         return false;
     }
@@ -788,39 +837,9 @@ function questionHandler(channel, uuid, username, msg, callback) {
         return false;
     }
 
-    if (questionThrottle.users[uuid] === undefined) {
-        questionThrottle.users[uuid] = { throttle: timestamp, chat: aichatCreate(channel) };
-    } else {
-        questionThrottle.users[uuid].throttle = timestamp;
-    }
+    questionThrottle.users[uuid].throttle = timestamp;
     aichatMessage(questionThrottle.users[uuid].chat, username, message);
-
-    brainClient.chat.completions.create({
-        model: config.GROK_MODEL,
-        search_parameters: { mode: 'auto', max_search_results: 5, return_citations: false },
-        messages: questionThrottle.users[uuid].chat.data,
-    }).then(response => {
-        const output = response.choices[0].message.content.trim();
-        if (output.length == 0 || output.indexOf('[IDK]') !== -1) {
-            return;
-        }
-        if (output.length > 400 || questionThrottle.users[uuid].chat.size > questionThrottle.memory) {
-            console.log('[OpenAI] MEMOIZE')
-            aichatMessage(questionThrottle.users[uuid].chat, config.BOT_SYSTEM, 'Суммаризируй текущий диалог в компактном виде. Твой ответ будет использоваться как контекст в следующем диалоге.');
-            brainClient.chat.completions.create({
-                model: config.GROK_MODEL,
-                messages: questionThrottle.users[uuid].chat.data,
-            }).then(answer => questionThrottle.users[uuid].chat = aichatCreate(channel, answer.choices[0].message.content)
-            ).catch(error => console.log(error));
-        }
-        let msg = {
-                text: output,
-                action: 'cmd',
-                intent: 'cmd',
-                command: isCommand,
-            };
-        callback(msg);
-    }).catch(error => console.log(error));
+    callBrain(channel, uuid, callback);
     return true;
 
     dialogClient
