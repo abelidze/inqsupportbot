@@ -9,7 +9,6 @@ const cookie = require('cookie');
 const redis = require('redis');
 const axios = require('axios');
 const OpenAI = require('openai');
-const http = require('https-proxy-agent');
 const sio = require('socket.io').listen(9090);
 const io = require('socket.io-client');
 const fs = require('fs');
@@ -22,18 +21,17 @@ const alertsClient = io('wss://socket9.donationalerts.ru:443', {
         reconnectionDelay: 1000,
     });
 
-const brainClient = new OpenAI({
-    apiKey: config.GROK_KEY,
-    baseURL: config.GROK_URL,
-    httpAgent: new http.HttpsProxyAgent(config.BOT_PROXY),
-});
 const redisClient = redis.createClient({
     host: config.REDIS_HOST,
     port: config.REDIS_PORT,
     password: config.REDIS_PASS,
     retry_strategy: config.REDIS_POLICY,
 });
+
+const AI = () => config.BOT_BACKEND[config.BOT_AI];
+const brainClient = new OpenAI({ apiKey: AI().key, baseURL: AI().url, timeout: 10000 });
 const dialogClient = new dialogflow.SessionsClient();
+
 const discordClient = new discord.Client({
     intents: [
         discord.GatewayIntentBits.Guilds,
@@ -62,6 +60,10 @@ const uuidToClient = {};
 const shortidToUuid = {};
 let botCommands = [];
 let streamerData = {};
+
+const MAX_DELAY_MS = 60_000;
+const BASE_DELAY_MS = 2_000;
+let discordAttempts = 0;
 
 // TODO: refactor for ES6+
 // TODO: OOP is really needed
@@ -203,8 +205,8 @@ sio.on('connection', function (socket) {
                         client.private.time = timestamp;
                     }
 
-                    const textChannel = await discordClient.channels.find(function (ch) {
-                        return ch.id === config.CHANNEL;
+                    const textChannel = await discordClient.channels.cache.find(function (ch) {
+                        return config.DISCORD_CHANNELS.includes(ch.id);
                     });
 
                     if (textChannel) {
@@ -220,30 +222,26 @@ sio.on('connection', function (socket) {
                 return;
             }
 
-            dialogClient
-                .detectIntent({
-                    session: client.session,
-                    queryInput: {
-                        text: {
-                            text: tokens[2],
-                            languageCode: 'ru-RU',
-                        }
+            dialogClient.detectIntent({
+                session: client.session,
+                queryInput: {
+                    text: {
+                        text: tokens[2],
+                        languageCode: 'ru-RU',
                     }
-                })
-                .then(function (responses) {
-                    const result = responses[0].queryResult;
-                    passToDiscord = (!result.intent || result.action == 'input.unknown');
-                    if (!passToDiscord && result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
-                        response.message.data.text = result.fulfillmentMessages[0].text.text[0];
-                    } else {
-                        response.message.data.text = result.fulfillmentText;
-                    }
-                })
-                .catch(function (err) {
-                    console.error('[DialogError]', err);
-                    passToDiscord = true;
-                })
-                .finally(processDiscord);
+                }
+            }).then(function (responses) {
+                const result = responses[0].queryResult;
+                passToDiscord = (!result.intent || result.action == 'input.unknown');
+                if (!passToDiscord && result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
+                    response.message.data.text = result.fulfillmentMessages[0].text.text[0];
+                } else {
+                    response.message.data.text = result.fulfillmentText;
+                }
+            }).catch(function (err) {
+                console.error('[DialogError]', err);
+                passToDiscord = true;
+            }).finally(processDiscord);
         });
         /// END INIT REDIS
     }
@@ -283,12 +281,47 @@ redisClient.on('message', function (channel, payload) {
 });
 
 redisClient.on('error', function (err) {
-    console.error('[RedisError] ', err);
+    console.error('[RedisError]', err);
 });
 
 /**
  * DISCORD
  */
+
+function isFatalLoginError(err) {
+    const msg = String(err?.message || '');
+    return (
+        msg.includes('TOKEN_INVALID') ||
+        msg.includes('An invalid token was provided') ||
+        err?.code === 50035 // Invalid Form Body (covers some malformed-token cases)
+    );
+}
+
+function backoffDelay(attempt) {
+    const expo = BASE_DELAY_MS * Math.pow(2, Math.max(0, attempt - 1));
+    const jitter = Math.floor(Math.random() * 1000);
+    return Math.min(MAX_DELAY_MS, expo + jitter);
+}
+
+async function discordLoginWithRetry(client, token) {
+    for (;;) {
+        try {
+            discordAttempts += 1;
+            await client.login(token);
+            console.log('[Discord] Logged in after', discordAttempts, 'attempt(s).');
+            discordAttempts = 0;
+            return;
+        } catch (err) {
+            if (isFatalLoginError(err)) {
+                console.error('[DiscordLogin:FATAL]', err?.message || err);
+                return;
+            }
+            const d = backoffDelay(discordAttempts);
+            console.error(`[DiscordLogin:RETRY] attempt=${discordAttempts} in ${d}ms →`, err?.code || err?.message || err);
+            await new Promise(r => setTimeout(r, d));
+        }
+    }
+}
 
 discordClient.on(discord.Events.ClientReady, function () {
     console.log('[Discord] Hi, %s!', discordClient.user.tag);
@@ -296,28 +329,33 @@ discordClient.on(discord.Events.ClientReady, function () {
 
 discordClient.on(discord.Events.MessageCreate, function (message) {
     const msg = message.cleanContent.trim();
-    if (message.member && message.member.permissions.has('ADMINISTRATOR') && msg.match(config.YOUTUBE_TRIGGER)) {
-        questionThrottle.users = { };
-        setTimeout(function () {
-            youtubeClient.runImmediate()
-                .then(function () {
-                    if (!youtubeClient.getStreamData().liveId) {
-                        message.reply('YouTube-стрим не найден!');
-                    }
-                })
-                .catch(function (err) {
-                    if (err.response && err.response.data) {
-                        console.error('[DiscordYouTubeError]', err.response.data.error);
-                    } else {
-                        console.error('[DiscordYouTubeError]', err);
-                    }
-                    message.reply('YouTube-API отклонило запрос!');
-                });
-            }, 15000);
-        return;
+
+    try {
+        if (message.member?.permissions?.has(discord.PermissionFlagsBits.Administrator) && msg.match(config.YOUTUBE_TRIGGER)) {
+            questionThrottle.users = { };
+            setTimeout(function () {
+                youtubeClient.runImmediate()
+                    .then(function () {
+                        if (!youtubeClient.getStreamData().liveId) {
+                            message.reply('YouTube-стрим не найден!');
+                        }
+                    })
+                    .catch(function (err) {
+                        if (err.response && err.response.data) {
+                            console.error('[DiscordYouTubeError]', err.response.data.error);
+                        } else {
+                            console.error('[DiscordYouTubeError]', err);
+                        }
+                        message.reply('YouTube-API отклонило запрос!');
+                    });
+                }, 15000);
+            return;
+        }
+    } catch (err) {
+        console.error('[DiscordYouTubeError]', err);
     }
 
-    if (message.channel.id !== config.CHANNEL || message.author.tag == discordClient.user.tag) {
+    if (!config.DISCORD_CHANNELS.includes(message.channel.id) || message.author.tag == discordClient.user.tag) {
         return;
     }
 
@@ -376,7 +414,7 @@ discordClient.on(discord.Events.MessageCreate, function (message) {
             response.author = {
                 id: message.author.tag,
                 name: message.author.username,
-                imageUrl: message.author.avatarURL,
+                imageUrl: message.author.avatarURL(),
             };
         }
 
@@ -387,7 +425,7 @@ discordClient.on(discord.Events.MessageCreate, function (message) {
 
     switch (command) {
         case 'ban':
-            if (!message.member.hasPermission('BAN_MEMBERS')) {
+            if (!message.member?.permissions?.has(discord.PermissionFlagsBits.BanMembers)) {
                 break;
             }
             $backend.get('/api/ban/' + uuid)
@@ -404,7 +442,7 @@ discordClient.on(discord.Events.MessageCreate, function (message) {
             break;
 
         case 'unban':
-            if (!message.member.hasPermission('BAN_MEMBERS')) {
+            if (!message.member?.permissions?.has(discord.PermissionFlagsBits.BanMembers)) {
                 break;
             }
             $backend.get('/api/unban/' + shortidToUuid[id])
@@ -510,7 +548,7 @@ function getLastSongText(fallback) {
     }
 
     if (config.DALERTS.songTitle) {
-        return `${config.DALERTS.songTitle} ${config.DALERTS.songUrl ? ' ' + config.DALERTS.songUrl : ''}\n5 последних заказов: https://inq.page.link/clip`;
+        return `${config.DALERTS.songTitle} ${config.DALERTS.songUrl ? ' ' + config.DALERTS.songUrl : ''}`;
     }
     alertsClient.emit('media', {
         token: config.DALERTS.token,
@@ -654,11 +692,12 @@ async function getStreamData(clientId, token, streamer) {
             headers: { 'Client-ID': clientId, 'Authorization': `Bearer ${token}` }
         });
         const bot = config.BOT_NAME;
-        const game = response.data.data[0]?.game_name || 'Just Chatting';
         const username = response.data.data[0]?.user_name || streamer;
-        const title = response.data.data[0]?.title || 'Offline or no title';
+        const game = response.data.data[0]?.game_name || 'стрим оффлайн';
+        const title = response.data.data[0]?.title || 'стрим оффлайн';
+        const today = new Date(Date.now()).toISOString();
         const viewers = response.data.data[0]?.viewer_count || 0;
-        return { bot, streamer, username, game, title, viewers };
+        return { bot, streamer, username, game, title, today, viewers };
     } catch (error) {
         console.error('[Stream Error]', error.response?.data || error.message);
         throw error;
@@ -666,44 +705,57 @@ async function getStreamData(clientId, token, streamer) {
 }
 
 async function updateData(isLooped=true) {
-    $backend.get('/api/commands')
-        .then(function (response) {
+    try {
+        // refresh commands from backend (keep its own try/catch to avoid masking)
+        try {
+            const response = await $backend.get('/api/commands');
             if (Array.isArray(response.data)) {
-                botCommands = [];
-                for (let cmd of response.data) {
-                    cmd.regex = new RegExp(`^${cmd.regex}(.*)`, 'i');
-                    botCommands.push(cmd);
+                botCommands = response.data.map(cmd => ({
+                    ...cmd,
+                    regex: new RegExp(`^${cmd.regex}(.*)`, 'i'),
+                }));
+            }
+        } catch (err) {
+            if (err.response) console.error('[ApiError]', err.response?.status, err.response?.data);
+            else console.error('[ApiError]', err.message || err);
+        }
+
+        // Twitch token (network can fail → catch!)
+        let token;
+        try {
+            token = await getToken(config.TWITCH_CLIENT_ID, config.TWITCH_SECRET);
+        } catch (e) {
+            console.error('[Twitch OAuth]', 'Failed to get token:', e?.code || e?.message || e);
+            token = null; // skip stream polling this round
+        }
+
+        const channels = config.TWITCH.channels.map(x => x.startsWith('#') ? x.slice(1) : x);
+
+        if (token) {
+            for (const channel of channels) {
+                try {
+                    const data = await getStreamData(config.TWITCH_CLIENT_ID, token, channel);
+                    streamerData[channel] = {
+                        ...data,
+                        bio: config.TWITCH.bio[channel] || '',
+                        clip: getLastSongText(null) || '-',
+                        age: typeof config.TWITCH.ages[channel] === 'number'
+                            ? ~~((Date.now() - config.TWITCH.ages[channel]) / 31557600000)
+                            : (config.TWITCH.ages[channel] || '?'),
+                    };
+                } catch (error) {
+                    console.error('[Stream Error]', channel, error?.code || error?.message || error);
+                    // continue to next channel
                 }
             }
-        })
-        .catch(function (err) {
-            if (err.response) {
-                console.error('[ApiError]', err.response);
-            } else if (err.message) {
-                console.error('[ApiError]', err.message);
-            } else if (err.errno) {
-                console.error('[ApiError]', err.errno);
-            } else {
-                console.error('[ApiError]', err);
-            }
-        });
-
-    const token = await getToken(config.TWITCH_CLIENT_ID, config.TWITCH_SECRET);
-    const channels = config.TWITCH.channels.map(x => x.startsWith('#') ? x.substring(1) : x);
-    for (const channel of channels) {
-        try {
-            streamerData[channel] = await getStreamData(config.TWITCH_CLIENT_ID, token, channel);
-            streamerData[channel].bio = config.TWITCH.bio[channel] || '';
-            streamerData[channel].age = typeof config.TWITCH.ages[channel] === 'number'
-                ? ~~((Date.now() - config.TWITCH.ages[channel]) / (31557600000))
-                : config.TWITCH.ages[channel] || '?';
-        } catch (error) {
-            console.log(error);
         }
-    }
-
-    if (isLooped) {
-        setTimeout(updateData, config.COMMAND_INTERVAL);
+    } catch (fatal) {
+        // Defensive catch for any unexpected path
+        console.error('[updateData:FATAL]', fatal?.code || fatal?.message || fatal);
+    } finally {
+        if (isLooped) {
+            setTimeout(updateData, config.DATA_POLLING_INTERVAL);
+        }
     }
 }
 
@@ -719,60 +771,129 @@ function template(source, tags) {
 }
 
 function aichatCreate(channel, summary) {
-    const chat = { pending: true, size: 0, data: [{ role: config.BOT_SYSTEM, content: template(config.BOT_CONTEXT, streamerData[channel]) }] };
+    const chat = { bump: 0, size: 0, channel: channel, data: [{ role: AI().system, content: template(config.BOT_CONTEXT, streamerData[channel]) }] };
     if (summary !== undefined) {
         chat.data.push({ role: 'assistant', content: `@InqSupportBot: ${summary}` });
     }
     return chat;
 }
 
-function aichatMessage(chat, username, message) {
-    if (chat.data.length > questionThrottle.memory / 2 + 1) {
+function aichatMessage(chat, username, message, count) {
+    for (let i = 0; i < (count || 0); i++) {
+        chat.data.pop();
+    }
+    if (chat.data.length > questionThrottle.memory / 2) {
         chat.data.splice(1, 2);
     }
-    if (username == config.BOT_SYSTEM) {
-        chat.data.push({ role: config.BOT_SYSTEM, content: message });
+    if (username == AI().system) {
+        chat.data.push({ role: AI().system, content: message });
     } else {
         chat.data.push({ role: username == config.BOT_NAME ? 'assistant' : 'user', content: `@${username}: ${message}` });
     }
-    chat.pending = true;
     chat.size += 1;
 }
 
-function callBrain(channel, uuid, callback) {
-    if (!questionThrottle.users[uuid].chat.pending) {
+function aichatIsEmpty(chat) {
+    return chat.bump >= chat.size;
+}
+
+function aichatBump(chat) {
+    chat.data[0].content = template(config.BOT_CONTEXT, streamerData[chat.channel]);
+    chat.bump = chat.size;
+    // console.log(chat.data);
+}
+
+function aichatProcess(channel, uuid, callback, isDirectMessage) {
+    if (aichatIsEmpty(questionThrottle.users[uuid].chat)) {
         return;
     }
-    questionThrottle.users[uuid].chat.pending = false;
+    aichatBump(questionThrottle.users[uuid].chat);
+    const messages = isDirectMessage
+        ? questionThrottle.users[uuid].chat.data
+        : [{ role: AI().system, content: config.BOT_PRIVATE }, ...questionThrottle.users[uuid].chat.data];
     brainClient.chat.completions.create({
-        model: config.GROK_MODEL,
-        search_parameters: { mode: 'off' },
-        messages: questionThrottle.users[uuid].chat.data,
+        model: AI().model,
+        // search_parameters: { mode: 'off' },
+        messages: messages,
     }).then(response => {
-        const output = response.choices[0].message.content.trim();
+        const output = choose(response.choices).message.content.replace(/\(\[.+\]\s*\(http.+\)\)/i, '').replace(/\[(.+)\]\s*\(http.+\)/i, '$1').trim();
         if (output.length == 0 || output.indexOf('[IDK]') !== -1) {
             const data = questionThrottle.users[uuid].chat.data;
-            console.log(`[OpenAI] ${channel}: ${output} | ${data[data.length - 1].content}`);
+            console.log(`[OpenAI][${channel}] ${output} | ${data[data.length - 1].content}`);
             return;
         }
-        if (output.length > 400 || questionThrottle.users[uuid].chat.size > questionThrottle.memory) {
-            console.log(`[OpenAI] ${channel}: MEMOIZE`)
-            aichatMessage(questionThrottle.users[uuid].chat, config.BOT_SYSTEM, 'Суммаризируй текущий диалог в компактном виде. Твой ответ будет использоваться как контекст в следующем диалоге.');
-            brainClient.chat.completions.create({
-                model: config.GROK_MODEL,
-                messages: questionThrottle.users[uuid].chat.data,
-            }).then(answer => questionThrottle.users[uuid].chat = aichatCreate(channel, answer.choices[0].message.content)
-            ).catch(error => console.log(error));
-        }
+
         aichatMessage(questionThrottle.users[uuid].chat, config.BOT_NAME, output);
+
+        // if (output.length > 400) {
+        //     aichatMessage(questionThrottle.users[uuid].chat, AI().system, config.BOT_COMPRESS);
+        //     aichatBump(questionThrottle.users[uuid].chat);
+        //     console.log(`[OpenAI][${channel}] COMPRESS | ${output}`);
+        //     brainClient.chat.completions.create({
+        //         model: AI().model,
+        //         // search_parameters: { mode: 'off' },
+        //         messages: questionThrottle.users[uuid].chat.data,
+        //     }).then(function(response) {
+        //         const summary = response.choices[0].message.content;
+        //         aichatMessage(questionThrottle.users[uuid].chat, config.BOT_NAME, summary, 2);
+        //         aichatBump(questionThrottle.users[uuid].chat);
+        //         callback({ text: summary, action: 'cmd', intent: 'cmd', command: true });
+        //     }).catch(error => console.log('[ChatError]', error));
+        //     return;
+        // }
+
+        if (questionThrottle.users[uuid].chat.size > questionThrottle.memory) {
+            aichatMessage(questionThrottle.users[uuid].chat, AI().system, config.BOT_MEMORY);
+            aichatBump(questionThrottle.users[uuid].chat);
+            brainClient.chat.completions.create({
+                model: AI().model,
+                // search_parameters: { mode: 'off' },
+                messages: questionThrottle.users[uuid].chat.data,
+            }).then(function(response) {
+                const summary = choose(response.choices).message.content;
+                questionThrottle.users[uuid].chat = aichatCreate(channel, summary);
+                console.log(`[OpenAI][${channel}] MEMOIZE | ${summary}`);
+            }).catch(error => console.log('[ChatError]', error));
+        }
+        callback({
+            text: output.replace(/\[LINK_TO_WARBORNE\]/i, 'https://r.qoolandgames.com/warborne/index?allianceId=494&invitationCode=7XZn39KO'),
+            action: 'cmd',
+            intent: 'cmd',
+            command: true
+        });
+    }).catch(error => console.log('[ChatError]', error));
+}
+
+function aichatDialog(uuid, message, callback) {
+    dialogClient.detectIntent({
+        session: dialogClient.sessionPath(config.DIALOGFLOW_PROJECT, uuid),
+        queryInput: {
+            text: {
+                text: message.substr(0, 255),
+                languageCode: 'ru-RU',
+            }
+        }
+    }).then(function (responses) {
+        const result = responses[0].queryResult;
         let msg = {
-                text: output,
-                action: 'cmd',
-                intent: 'cmd',
-                command: true,
+                text: result.fulfillmentText,
+                action: result.action,
+                intent: result.intent.displayName,
+                command: isCommand,
             };
+        if (result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
+            msg.text = result.fulfillmentMessages[result.fulfillmentMessages.length - 1].text.text[0];
+        }
+
+        if (msg.intent.search('clip') !== -1) {
+            msg.text = getLastSongText(msg.text);
+        }
+
         callback(msg);
-    }).catch(error => console.log(error));
+    }).catch(function (err) {
+        console.error('[DialogError]', err);
+    });
+
 }
 
 /**
@@ -809,15 +930,29 @@ function questionHandler(channel, uuid, username, msg, callback) {
     }
     const userdata = questionThrottle.users[uuid];
 
-    tokens = tokens || (msg.match(config.REGEX) ? [ msg ] : null);
+    tokens = tokens || (msg.match(config.TWITCH.regex[channel]) ? [ msg ] : null);
     if (tokens == null) {
         aichatMessage(userdata.chat, username, msg);
         return false;
     }
 
     const message = tokens[tokens.length - 1].trim();
+
+    if (message == config.BOT_SONG) {
+        const song = getLastSongText(null);
+        if (song != null) {
+            callback({
+                    text: song,
+                    intent: 'cmd',
+                    action: 'cmd',
+                    command: true,
+                });
+            return true;
+        }
+    }
+
     if (timestamp - userdata.throttle < questionThrottle.limit) {
-        setTimeout(() => callBrain(channel, uuid, callback), timestamp - userdata.throttle + 500);
+        setTimeout(() => aichatProcess(channel, uuid, callback, isCommand), timestamp - userdata.throttle + 500);
         aichatMessage(userdata.chat, username, message);
         return false;
     }
@@ -839,41 +974,7 @@ function questionHandler(channel, uuid, username, msg, callback) {
 
     questionThrottle.users[uuid].throttle = timestamp;
     aichatMessage(questionThrottle.users[uuid].chat, username, message);
-    callBrain(channel, uuid, callback);
-    return true;
-
-    dialogClient
-        .detectIntent({
-            session: dialogClient.sessionPath(config.DIALOGFLOW_PROJECT, uuid),
-            queryInput: {
-                text: {
-                    text: message.substr(0, 255),
-                    languageCode: 'ru-RU',
-                }
-            }
-        })
-        .then(function (responses) {
-            const result = responses[0].queryResult;
-            let msg = {
-                    text: result.fulfillmentText,
-                    action: result.action,
-                    intent: result.intent.displayName,
-                    command: isCommand,
-                };
-
-            if (result.fulfillmentMessages && result.fulfillmentMessages.length > 0) {
-                msg.text = result.fulfillmentMessages[result.fulfillmentMessages.length - 1].text.text[0];
-            }
-
-            if (msg.intent.search('clip') !== -1) {
-                msg.text = getLastSongText(msg.text);
-            }
-
-            callback(msg);
-        })
-        .catch(function (err) {
-            console.error('[DialogError]', err);
-        });
+    aichatProcess(channel, uuid, callback, isCommand);
     return true;
 }
 
@@ -902,8 +1003,12 @@ function choose(choices) {
     return choices[ Math.floor(Math.random() * choices.length) ];
 }
 
-updateData();
-redisClient.subscribe('control');
-twitchClient.connect();
-discordClient.login(config.DISCORD_TOKEN);
-youtubeClient.login();
+function main() {
+    updateData();
+    redisClient.subscribe('control');
+    youtubeClient.login();
+    twitchClient.connect().catch(err => console.error('[TwitchConnectError]', err?.code || err?.message || err));
+    discordLoginWithRetry(discordClient, config.DISCORD_TOKEN);
+}
+
+main();

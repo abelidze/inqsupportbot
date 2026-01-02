@@ -12,7 +12,6 @@
         "cookie": "^0.3.1",
         "dialogflow": "^1.2.0",
         "discord.js": "^14.21.0",
-        "https-proxy-agent": "^7.0.6",
         "openai": "^5.12.2",
         "redis": "^2.8.0",
         "request": "^2.88.0",
