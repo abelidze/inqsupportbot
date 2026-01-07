@@ -1,5 +1,6 @@
-const OAuth2 = require('./oauth');
-const axios = require('axios');
+import OAuth2 from './oauth.js';
+import { buildUrl, fetchJson, fetchText } from '../utils.js';
+
 const getYoutube = Symbol('getYoutube');
 const postYoutube = Symbol('postYoutube');
 const streamData = Symbol('streamData');
@@ -14,7 +15,7 @@ const SEARCH = Symbol('SEARCH');
 const PLAYLIST = Symbol('PLAYLIST');
 const BROADCAST = Symbol('BROADCAST');
 
-class Youtube extends OAuth2 {
+export class YoutubeClient extends OAuth2 {
     constructor(params) {
         if (typeof params !== 'object') {
             throw new Error('YouTube params must be object');
@@ -37,16 +38,18 @@ class Youtube extends OAuth2 {
         };
 
         if (params.ownerCredentials) {
-            if (typeof params.ownerCredentials == 'function') {
+            if (typeof params.ownerCredentials === 'function') {
                 params.ownerCredentials = params.ownerCredentials();
                 this[streamData].ownerCredentialsUpdater = params.ownerCredentials;
             }
             this[streamData].ownerCredentials = new OAuth2(
-                    params.ownerCredentials,
-                    'https://accounts.google.com/o/oauth2/',
-                    'auth'
-                );
-            this[streamData].ownerCredentials.on('credentials', (c => { this.emit('credentials', c); }).bind(this));
+                params.ownerCredentials,
+                'https://accounts.google.com/o/oauth2/',
+                'auth',
+            );
+            this[streamData].ownerCredentials.on('credentials', (c) => {
+                this.emit('credentials', c);
+            });
         }
 
         this[urlsYoutube] = {
@@ -63,45 +66,43 @@ class Youtube extends OAuth2 {
             chat: null,
         };
 
-        this.axiosYoutube = axios.create({
-            baseURL: 'https://www.googleapis.com/youtube/v3/'
+        this.on('online', () => {
+            this[streamData].isOnline = true;
         });
-
-        this.on('online', function () { this[streamData].isOnline = true; });
-        this.on('offline', function () { this[streamData].isOnline = false; });
+        this.on('offline', () => {
+            this[streamData].isOnline = false;
+        });
     }
 
     login(code) {
-        let self = this;
-
-        if (typeof self[streamData].ownerCredentialsUpdater == 'function') {
-            self[streamData].updateCredentials( self[streamData].ownerCredentialsUpdater() );
+        if (typeof this[streamData].ownerCredentialsUpdater === 'function') {
+            this[streamData].ownerCredentials.updateCredentials(this[streamData].ownerCredentialsUpdater());
         }
 
         if (code) {
-            self.connect(code)
-                .then(function () {
-                    self[timers].master = setTimeout(self[runMaster].bind(self), 100, true);
-                    self.emit('ready');
+            this.connect(code)
+                .then(() => {
+                    this[timers].master = setTimeout(this[runMaster].bind(this), 100, true);
+                    this.emit('ready');
                 })
-                .catch(function (err) {
-                    self.emit('error', err);
+                .catch((err) => {
+                    this.emit('error', err);
                 });
-        } else if (self.getCredentials().refreshToken) {
-            self.check()
-                .then(function () {
-                    self[timers].master = setTimeout(self[runMaster].bind(self), 100, true);
-                    self.emit('ready');
+        } else if (this.getCredentials().refreshToken) {
+            this.check()
+                .then(() => {
+                    this[timers].master = setTimeout(this[runMaster].bind(this), 100, true);
+                    this.emit('ready');
                 })
-                .catch(function (err) {
+                .catch((err) => {
                     if (err.response && err.response.status >= 400 && err.response.status < 500) {
-                        self.emit('login');
+                        this.emit('login');
                     } else {
-                        self.emit('error', err);
+                        this.emit('error', err);
                     }
                 });
         } else {
-            self.emit('login');
+            this.emit('login');
         }
     }
 
@@ -124,7 +125,7 @@ class Youtube extends OAuth2 {
     }
 
     authorizationUrl() {
-        return super.authorizationUrl() + '&access_type=offline&approval_prompt=force';
+        return `${super.authorizationUrl()}&access_type=offline&approval_prompt=force`;
     }
 
     getStreamData() {
@@ -133,90 +134,88 @@ class Youtube extends OAuth2 {
 
     async runImmediate() {
         this.stop(true);
-        return await this[runMaster](true, true);
+        return this[runMaster](true, true);
     }
 
     async getChannel() {
-        let url = this[urlsYoutube].channels;
-        let params = {
+        const url = this[urlsYoutube].channels;
+        const params = {
             part: 'snippet,contentDetails,brandingSettings,invideoPromotion,statistics',
             mine: true,
-            key: this[streamData].key
+            key: this[streamData].key,
         };
 
-        let result = await this[getYoutube](url, params);
+        const result = await this[getYoutube](url, params);
         this[streamData].channelId = result.items[0].id;
 
         return result;
     }
 
     async getViewers() {
-        let url = `https://www.youtube.com/live_stats?v=${this[streamData].liveId}`;
-        let result = await axios.get(url);
-        return result.data;
+        const url = `https://www.youtube.com/live_stats?v=${this[streamData].liveId}`;
+        return fetchText(url);
     }
 
     async sendMessage(message) {
-        let url = this[urlsYoutube].chats;
-        let params = {
+        const url = this[urlsYoutube].chats;
+        const params = {
             part: 'snippet',
-            fields: 'snippet',//,kind,authorDetails',
+            fields: 'snippet',
             key: this[streamData].key,
-        }
-        let data = {
+        };
+        const data = {
             snippet: {
                 type: 'textMessageEvent',
                 textMessageDetails: {
-                    messageText: message
+                    messageText: message,
                 },
-                liveChatId: this[streamData].chatId
-            }
-        }
+                liveChatId: this[streamData].chatId,
+            },
+        };
 
-        return await this[postYoutube](url, params, data);
+        return this[postYoutube](url, params, data);
     }
 
     async searchStream() {
-        let self = this;
         console.log('[YouTube]', 'Searching stream...');
-        return await new Promise(async function (resolve, reject) {
-                if (self[streamData].ownerCredentials) {
-                    try {
-                        await self[BROADCAST]();
-                        return resolve();
-                    } catch (err) {
-                        if (err.response && err.response.data.error.code == 403) {
-                            return reject(err);
-                        }
-                        self.emit('error', err);
+        return new Promise(async (resolve, reject) => {
+            if (this[streamData].ownerCredentials) {
+                try {
+                    await this[BROADCAST]();
+                    return resolve();
+                } catch (err) {
+                    if (err.response && err.response.data.error.code === 403) {
+                        return reject(err);
                     }
+                    this.emit('error', err);
                 }
+            }
 
-                if (self[streamData].playlistId) {
-                    try {
-                        await self[PLAYLIST]();
-                        return resolve();
-                    } catch (err) {
-                        if (err.response && err.response.data.error.code == 403) {
-                            return reject(err);
-                        }
-                        self.emit('error', err);
+            if (this[streamData].playlistId) {
+                try {
+                    await this[PLAYLIST]();
+                    return resolve();
+                } catch (err) {
+                    if (err.response && err.response.data.error.code === 403) {
+                        return reject(err);
                     }
+                    this.emit('error', err);
                 }
+            }
 
-                if (self[streamData].channelId) {
-                    try {
-                        await self[SEARCH]();
-                        return resolve();
-                    } catch (err) {
-                        if (err.response && err.response.data.error.code == 403) {
-                            return reject(err);
-                        }
-                        self.emit('error', err);
+            if (this[streamData].channelId) {
+                try {
+                    await this[SEARCH]();
+                    return resolve();
+                } catch (err) {
+                    if (err.response && err.response.data.error.code === 403) {
+                        return reject(err);
                     }
+                    this.emit('error', err);
                 }
-                return reject(new Error('No video_id provider is available'));
-            });
+            }
+            return reject(new Error('No video_id provider is available'));
+        });
     }
 
     async searchChat() {
@@ -225,14 +224,14 @@ class Youtube extends OAuth2 {
         }
         console.log('[YouTube]', 'Searching liveChat...');
 
-        let url = this[urlsYoutube].videos;
-        let params = {
+        const url = this[urlsYoutube].videos;
+        const params = {
             part: 'liveStreamingDetails',
             id: this[streamData].liveId,
             key: this[streamData].key,
         };
 
-        let result = await this[getYoutube](url, params);
+        const result = await this[getYoutube](url, params);
         if (result.items && result.items.length > 0 && result.items[0].liveStreamingDetails) {
             const details = result.items[0].liveStreamingDetails;
             if (details.actualStartTime && details.actualEndTime === undefined) {
@@ -255,15 +254,15 @@ class Youtube extends OAuth2 {
             throw new Error('chatId is undefined, getting chat is impossible');
         }
 
-        let url = this[urlsYoutube].chats;
-        let params = {
+        const url = this[urlsYoutube].chats;
+        const params = {
             part: 'snippet,authorDetails',
             key: this[streamData].key,
             liveChatId: this[streamData].chatId,
             pageToken: this[streamData].pageToken,
         };
 
-        return await this[getYoutube](url, params);
+        return this[getYoutube](url, params);
     }
 
     [resetStreamData]() {
@@ -274,93 +273,93 @@ class Youtube extends OAuth2 {
     }
 
     async [runMaster](bootstrap = false, raise = false) {
-        let self = this;
-
         try {
-            if (!self[streamData].liveId && (bootstrap || self[streamData].autoSearch)) {
-                await self.searchStream();
+            if (!this[streamData].liveId && (bootstrap || this[streamData].autoSearch)) {
+                await this.searchStream();
             }
 
-            if (self[streamData].liveId && !self[streamData].chatId) {
-                await self.searchChat();
+            if (this[streamData].liveId && !this[streamData].chatId) {
+                await this.searchChat();
             }
 
-            if (self[streamData].isOnline && (!self[streamData].liveId || !self[streamData].chatId)) {
-                self.stop();
-            } else if (!self[streamData].isOnline && self[streamData].liveId && self[streamData].chatId) {
-                self.emit('online', self[streamData].key);
-                self[timers].chat = setTimeout(self[chatPolling].bind(self), self[streamData].chatdt, true);
+            if (this[streamData].isOnline && (!this[streamData].liveId || !this[streamData].chatId)) {
+                this.stop();
+            } else if (!this[streamData].isOnline && this[streamData].liveId && this[streamData].chatId) {
+                this.emit('online', this[streamData].key);
+                this[timers].chat = setTimeout(this[chatPolling].bind(this), this[streamData].chatdt, true);
             }
         } catch (err) {
             if (raise) {
                 throw err;
             }
-            self.emit('error', err);
+            this.emit('error', err);
         }
-        if (bootstrap || self[timers].master) {
-            self[timers].master = setTimeout(self[runMaster].bind(self), self[streamData].livedt);
+        if (bootstrap || this[timers].master) {
+            this[timers].master = setTimeout(this[runMaster].bind(this), this[streamData].livedt);
         }
     }
 
     async [chatPolling](bootstrap = false) {
-        let self = this;
-
-        await self.getLiveChat()
-            .then(function (chat) {
+        await this.getLiveChat()
+            .then((chat) => {
                 if (chat.offlineAt) {
-                    if (self[streamData].isOnline) {
-                        self[streamData].isOnline = false;
-                        self.emit('offline', self[streamData].key);
+                    if (this[streamData].isOnline) {
+                        this[streamData].isOnline = false;
+                        this.emit('offline', this[streamData].key);
                     }
-                    self[resetStreamData]();
+                    this[resetStreamData]();
                     return;
                 }
 
-                self[streamData].pageToken = chat.nextPageToken;
+                this[streamData].pageToken = chat.nextPageToken;
                 if (!bootstrap) {
-                    self[processMessages](chat.items);
+                    this[processMessages](chat.items);
                 }
 
-                if (self[timers].chat) {
-                    self[timers].chat = setTimeout(
-                            self[chatPolling].bind(self),
-                            Math.max(chat.pollingIntervalMillis || 0, self[streamData].chatdt),
-                            bootstrap && chat.pageInfo.totalResults > chat.pageInfo.resultsPerPage
-                        );
+                if (this[timers].chat) {
+                    this[timers].chat = setTimeout(
+                        this[chatPolling].bind(this),
+                        Math.max(chat.pollingIntervalMillis || 0, this[streamData].chatdt),
+                        bootstrap && chat.pageInfo.totalResults > chat.pageInfo.resultsPerPage,
+                    );
                 }
             })
-            .catch(function (err) {
-                    self.emit('error', err);
-                    if (self[streamData].isOnline) {
-                        self[streamData].chatId = null;
-                    }
-                });
+            .catch((err) => {
+                this.emit('error', err);
+                if (this[streamData].isOnline) {
+                    this[streamData].chatId = null;
+                }
+            });
     }
 
     async [processMessages](messages) {
-        if (!messages || messages.length == 0) {
+        if (!messages || messages.length === 0) {
             return;
         }
-        for (let msg of messages) {
-            if (!msg.snippet || !msg.snippet.displayMessage) continue;
+        for (const msg of messages) {
+            if (!msg.snippet || !msg.snippet.displayMessage) {
+                continue;
+            }
             this.emit('message', msg.snippet, msg.authorDetails);
         }
     }
 
     async [MANUAL]() {
-        return new Promise((resolve, reject) => { resolve() });
+        return new Promise((resolve) => {
+            resolve();
+        });
     }
 
     async [PLAYLIST]() {
-        let url = this[urlsYoutube].playlist;
-        let params = {
+        const url = this[urlsYoutube].playlist;
+        const params = {
             part: 'contentDetails',
             maxResults: 1,
             playlistId: this[streamData].playlistId,
-            key: this[streamData].key
+            key: this[streamData].key,
         };
 
-        let result = await this[getYoutube](url, params);
+        const result = await this[getYoutube](url, params);
         if (result.items && result.items.length > 0) {
             this[streamData].liveId = result.items[0].contentDetails.videoId;
         } else {
@@ -370,16 +369,16 @@ class Youtube extends OAuth2 {
     }
 
     async [SEARCH]() {
-        let url = this[urlsYoutube].search;
-        let params = {
+        const url = this[urlsYoutube].search;
+        const params = {
             part: 'id',
             channelId: this[streamData].channelId,
             eventType: 'live',
             type: 'video',
-            key: this[streamData].key
+            key: this[streamData].key,
         };
 
-        let result = await this[getYoutube](url, params);
+        const result = await this[getYoutube](url, params);
         if (result.items && result.items.length > 0) {
             this[streamData].liveId = result.items[0].id.videoId;
         } else {
@@ -389,16 +388,16 @@ class Youtube extends OAuth2 {
     }
 
     async [BROADCAST]() {
-        let url = this[urlsYoutube].live;
-        let params = {
+        const url = this[urlsYoutube].live;
+        const params = {
             part: 'snippet',
             broadcastType: 'all',
             broadcastStatus: 'active',
             fields: 'items(id,snippet/liveChatId)',
-            key: this[streamData].key
+            key: this[streamData].key,
         };
 
-        let result = await this[getYoutube](url, params, this[streamData].ownerCredentials);
+        const result = await this[getYoutube](url, params, this[streamData].ownerCredentials);
         if (result.items && result.items.length > 0) {
             this[streamData].liveId = result.items[0].id;
             this[streamData].chatId = result.items[0].snippet.liveChatId;
@@ -408,43 +407,31 @@ class Youtube extends OAuth2 {
             console.log('[YouTube]', 'liveStream not found via BROADCAST');
         }
 
-        return result;  
+        return result;
     }
 
     async [postYoutube](url, params, data, oauth = null) {
-        if (oauth === null) {
-            oauth = this;
-        }
-        await oauth.check();
+        const auth = oauth || this;
+        await auth.check();
 
-        let result = await this.axiosYoutube({
+        const fullUrl = buildUrl('https://www.googleapis.com/youtube/v3/', url, params);
+        return fetchJson(fullUrl, {
             method: 'POST',
-            url: url,
-            data: data,
-            params: params,
-            headers: {Authorization: `Bearer ${oauth.getCredentials().accessToken}`}
+            headers: {
+                Authorization: `Bearer ${auth.getCredentials().accessToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data),
         });
-
-        return result.data;
     }
 
     async [getYoutube](url, params, oauth = null) {
-        if (oauth === null) {
-            oauth = this;
-        }
-        await oauth.check();
+        const auth = oauth || this;
+        await auth.check();
 
-        let result = await this.axiosYoutube({
-            method: 'GET',
-            url: url,
-            params: params,
-            headers: {Authorization: `Bearer ${oauth.getCredentials().accessToken}`}
+        const fullUrl = buildUrl('https://www.googleapis.com/youtube/v3/', url, params);
+        return fetchJson(fullUrl, {
+            headers: { Authorization: `Bearer ${auth.getCredentials().accessToken}` },
         });
-
-        return result.data;
     }
-}
-
-module.exports = {
-    client: Youtube,
 }

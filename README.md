@@ -3,8 +3,6 @@ About InqSupportBot
 
 InqSupportBot is a chatbot integrated with dialogflow as backend and discord / twitch / socket.io (for website) as frontend.
 
-Code is pretty nasty and dirty and highly needs refactor.
-
 
 How it works
 ------------
@@ -46,7 +44,7 @@ Requirements
 ------------
 
 * Redis (for using with socker.io and your website)
-* Node.JS 10.0+
+* Node.JS 22.0+
 
 
 Configuration
@@ -73,7 +71,7 @@ module.exports = {
         },
         json: true
     },
-    TWITCH_OPTIONS: {
+    TWITCH: {
         options: {
           debug: true
         },
@@ -94,7 +92,7 @@ module.exports = {
             }
         }
     },
-    YOUTUBE_OPTIONS: {
+    YOUTUBE: {
         clientId: '<YOUTUBE_CLIENT_ID>',
         clientSecret: '<YOUTUBE_CLIENT_SECRET>',
         redirectUrl: '<YOUTUBE_REDIRECT>',
