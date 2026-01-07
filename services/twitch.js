@@ -1,7 +1,7 @@
 import { AppTokenAuthProvider, StaticAuthProvider } from '@twurple/auth';
 import { ApiClient } from '@twurple/api';
 import { ChatClient } from '@twurple/chat';
-import { EventSubHttpListener } from '@twurple/eventsub-http';
+import { EventSubHttpListener, ReverseProxyAdapter } from '@twurple/eventsub-http';
 import { NgrokAdapter } from '@twurple/eventsub-ngrok';
 
 export class TwitchService {
@@ -12,13 +12,25 @@ export class TwitchService {
             authProvider: new AppTokenAuthProvider(config.TWITCH_CLIENT_ID, config.TWITCH_SECRET),
             logger: config.TWITCH.logger,
         });
-        this.events = new EventSubHttpListener({
-            apiClient: this.api,
-            adapter: new NgrokAdapter({
+        let adapter = null;
+        if (config.TWITCH.eventsub) {
+            adapter = new ReverseProxyAdapter({
+                hostName: config.TWITCH.eventsub.host,
+                pathPrefix: config.TWITCH.eventsub.path,
+                usePathPrefixInHandlers: true,
+                port: 8443,
+            });
+        } else {
+            adapter = new NgrokAdapter({
+                port: 8443,
                 ngrokConfig: {
                     authtoken: config.NGROK
-                }
-            }),
+                },
+            });
+        }
+        this.events = new EventSubHttpListener({
+            adapter,
+            apiClient: this.api,
             secret: config.TWITCH_SECRET,
         });
         this.chat = new ChatClient({
@@ -67,7 +79,6 @@ export class TwitchService {
             if (user == this.chat.irc.currentNick || user.match(this.config.IGNORE)) {
                 return;
             }
-            console.log('TWTW', user, text);
             this.chatService.questionHandler(
                 channel.substring(1),
                 `t${msg.userInfo.userId}`,

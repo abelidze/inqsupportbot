@@ -7,7 +7,7 @@ export class ChatService {
         this.config = config;
         this.backendClient = backendClient;
         this.getLastSongText = getLastSongText;
-        this.botCommands = [];
+        this.commands = [];
         this.streamerData = {};
         this.questionThrottle = {
             users: {},
@@ -51,7 +51,7 @@ export class ChatService {
         let tokens = null;
         let isCommand = false;
 
-        for (const cmd of this.botCommands) {
+        for (const cmd of this.commands) {
             if ((tokens = msg.match(cmd.regex)) !== null) {
                 tokens[tokens.length - 1] = cmd.answer.replace(/{\s*query\s*}/i, tokens[tokens.length - 1].trim());
                 if (!cmd.use_backend) {
@@ -75,8 +75,8 @@ export class ChatService {
                 chat: this.#aichatCreate(channel),
             };
         }
-        const userdata = this.questionThrottle.users[uuid];
 
+        const userdata = this.questionThrottle.users[uuid];
         tokens = tokens || (msg.match(this.config.TWITCH.streamers[channel].regex) ? [msg] : null);
         if (tokens == null) {
             this.#aichatMessage(userdata.chat, username, msg);
@@ -84,7 +84,6 @@ export class ChatService {
         }
 
         const message = tokens[tokens.length - 1].trim();
-
         if (message === this.config.BOT_SONG) {
             const song = this.getLastSongText(null);
             if (song != null) {
@@ -142,7 +141,7 @@ export class ChatService {
         try {
             const data = await this.backendClient.get('/api/commands');
             if (Array.isArray(data)) {
-                this.botCommands = data.map((cmd) => ({
+                this.commands = data.map((cmd) => ({
                     ...cmd,
                     regex: new RegExp(`^${cmd.regex}(.*)`, 'i'),
                 }));
@@ -226,7 +225,10 @@ export class ChatService {
             bump: 0,
             size: 0,
             channel,
-            data: [{ role: this.#ai().system, content: template(this.config.BOT_CONTEXT, this.streamerData[channel]) }],
+            data: [{
+                role: this.#ai().system,
+                content: template(this.config.BOT_CONTEXT, this.streamerData[channel])
+            }],
         };
         if (summary !== undefined) {
             chat.data.push({ role: 'assistant', content: `@InqSupportBot: ${summary}` });

@@ -157,33 +157,37 @@ export class DiscordService {
     }
 
     #handleVoiceUpdates(before, after) {
+        let leftMessage = null;
         if (before.channelId != null) {
             if (!this.config.DISCORD.MASTER_CHANNELS.includes(before.channelId)) {
-                for (const id of this.config.DISCORD.LOGGING) {
-                    before.guild.channels.fetch(id).then((channel) => {
-                        channel.send({
-                            content: `<@${before.id}> (${before.member.user.tag}) left voice channel ${before.channel.name}.`,
-                            allowedMentions: {},
-                        });
-                    }).catch(_ => { });
-                }
+                leftMessage = `left voice channel ${before.channel.name}`;
             }
             if (storage.rooms.has(before.channelId) && before.channel.members.size < 1) {
                 this.#removeRoom(before.channel);
             }
         }
+        let joinedMessage = null;
         if (after.channelId != null) {
             if (this.config.DISCORD.MASTER_CHANNELS.includes(after.channelId)) {
                 this.#createRoom(after);
             } else {
-                for (const id of this.config.DISCORD.LOGGING) {
-                    after.guild.channels.fetch(id).then((channel) => {
-                        channel.send({
-                            content: `<@${after.id}> (${after.member.user.tag}) joined voice channel ${after.channel.name}.`,
-                            allowedMentions: {},
-                        });
-                    }).catch(_ => { });
-                }
+                joinedMessage = `joined voice channel ${after.channel.name}`;
+            }
+        }
+        let message = leftMessage;
+        if (leftMessage != null && joinedMessage != null) {
+            message = `${leftMessage} and ${joinedMessage}`
+        } else if (joinedMessage != null) {
+            message = joinedMessage;
+        }
+        if (message != null) {
+            for (const id of this.config.DISCORD.LOGGING) {
+                after.guild.channels.fetch(id).then((channel) => {
+                    channel.send({
+                        content: `<@${after.id}> (${after.member.user.tag}) ${message}.`,
+                        allowedMentions: {},
+                    });
+                }).catch(_ => { });
             }
         }
     }
@@ -256,6 +260,7 @@ export class DiscordService {
 
     async #handleMessage(message) {
         const msg = message.cleanContent.trim();
+        console.log('DISCORD', msg);
         if (
             !this.config.DISCORD.CHAT_CHANNELS.includes(message.channel.id)
             || message.author.tag === this.client.user.tag

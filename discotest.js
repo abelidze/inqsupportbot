@@ -277,9 +277,9 @@ twitchChat.onAuthenticationSuccess(async () => {
     }
 
     const subs = await twitchApi.eventSub.getSubscriptions();
-    // for (let i = 2; i < subs.data.length; i++) {
-    //     await subs.data[i].unsubscribe();
-    // }
+    for (let i = 2; i < subs.data.length; i++) {
+        await subs.data[i].unsubscribe();
+    }
     console.log('SUBSCRIPTIONS', subs.data.map(x =>
         `ID: ${x.id}, Cost: ${x.cost}, Type: ${x.type}, Status: ${x.status}, Condition: ${JSON.stringify(x.condition)}`));
 });

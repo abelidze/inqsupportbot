@@ -84,7 +84,6 @@ export class HttpClient {
         const url = buildUrl(this.baseURL, path, { ...this.params, ...params });
         const mergedHeaders = { ...this.headers, ...headers };
         const options = { method, headers: mergedHeaders };
-
         if (body !== undefined) {
             if (
                 typeof body === 'string'
@@ -100,9 +99,7 @@ export class HttpClient {
                 };
             }
         }
-
-        const { data } = await request(url, options);
-        return data;
+        return fetchJson(url, options);
     }
 
     get(path, options = {}) {
