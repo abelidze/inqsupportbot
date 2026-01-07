@@ -19,6 +19,7 @@ export class ChatService {
         this.brainClient = new OpenAI({
             apiKey: this.#ai().key,
             baseURL: this.#ai().url,
+            project: this.#ai().project,
             timeout: 10000,
         });
     }
