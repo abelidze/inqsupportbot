@@ -80,7 +80,7 @@ export class TwitchService {
                 return;
             }
             this.chatService.questionHandler(
-                channel.substring(1),
+                channel,
                 `t${msg.userInfo.userId}`,
                 user,
                 text.trim(),

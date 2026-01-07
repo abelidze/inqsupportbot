@@ -76,8 +76,9 @@ export class ChatService {
             };
         }
 
+        const streamer = this.config.TWITCH.streamers[channel];
         const userdata = this.questionThrottle.users[uuid];
-        tokens = tokens || (msg.match(this.config.TWITCH.streamers[channel].regex) ? [msg] : null);
+        tokens = tokens || (streamer && msg.match(streamer.regex) ? [msg] : null);
         if (tokens == null) {
             this.#aichatMessage(userdata.chat, username, msg);
             return false;
