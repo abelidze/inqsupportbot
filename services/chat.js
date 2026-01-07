@@ -284,7 +284,7 @@ export class ChatService {
                     .replace(/\(\[.+\]\s*\(http.+\)\)/i, '')
                     .replace(/\[(.+)\]\s*\(http.+\)/i, '$1')
                     .trim();
-                if (output.length === 0 || output.includes('[IDK]')) {
+                if (output.length === 0 || output.includes('[IDK]') || output.includes('не могу обсуждать')) {
                     const data = this.questionThrottle.users[uuid].chat.data;
                     console.log(`[OpenAI][${channel}] ${output} | ${data[data.length - 1].content}`);
                     return;
