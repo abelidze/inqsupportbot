@@ -24,6 +24,7 @@
         "dialogflow": "^1.2.0",
         "discord.js": "^14.21.0",
         "enmap": "^6.1.3",
+        "mempalace-node": "^1.0.0",
         "openai": "^5.12.2",
         "redis": "^2.8.0",
         "shortid": "^2.2.14",
