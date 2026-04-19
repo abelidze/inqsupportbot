@@ -1,0 +1,46 @@
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "inq.name local SearXNG"
+
+search:
+  safe_search: 0
+  max_page: 1
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "inq-name-local-dev-secret"
+  limiter: false
+  image_proxy: false
+  bind_address: "0.0.0.0"
+  port: 8080
+  base_url: "http://localhost:8888/"
+
+engines:
+  - name: ahmia
+    inactive: true
+
+  - name: torch
+    inactive: true
+
+  - name: wikidata
+    inactive: true
+
+  - name: karmasearch
+    inactive: true
+
+  - name: karmasearch videos
+    inactive: true
+
+  - name: startpage
+    inactive: true
+
+  - name: startpage news
+    inactive: true
+
+  - name: startpage images
+    inactive: true

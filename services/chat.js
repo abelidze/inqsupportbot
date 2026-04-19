@@ -5,6 +5,7 @@ import dialogflow from 'dialogflow';
 import mempalace from 'mempalace-node';
 import OpenAI from 'openai';
 import { choose, template } from '../utils.js';
+import { WebSearchService } from './search.js';
 
 const { createStore, extractMemories, setModel } = mempalace;
 const CHAT_MEMORY_PATH = path.resolve(
@@ -23,6 +24,7 @@ const MEMORY_MIN_SIMILARITY = 0.35;
 const MEMORY_SNIPPET_LIMIT = 180;
 const MEMORY_MIN_MESSAGE_LENGTH = 20;
 const MAX_EXTRACTED_MEMORIES = 3;
+const WEB_SEARCH_TOOL_PATTERN = /^\[WEB_SEARCH\]\s*(.+)$/i;
 
 export class ChatService {
     constructor({ config, backendClient, getLastSongText }) {
@@ -37,6 +39,7 @@ export class ChatService {
             userWindow: USER_THREAD_LIMIT,
             memoryHits: MEMORY_QUERY_LIMIT,
         };
+        this.webSearch = new WebSearchService({ config });
         this.userMemoryStore = this.#createUserMemoryStore();
         this.userMemoryQueue = Promise.resolve();
         this.questionThrottle = {
@@ -527,7 +530,7 @@ export class ChatService {
         }
     }
 
-    async #aichatBuildMessages(channel, uuid, isDirectMessage, memoryQuery, username) {
+    async #aichatBuildMessages(channel, uuid, isDirectMessage, memoryQuery, username, extraSystemMessages = []) {
         const userdata = this.questionThrottle.users[uuid];
         this.#aichatBump(userdata.chat);
         const recentDialog = this.#aichatRecentDialog(userdata.chat);
@@ -536,7 +539,12 @@ export class ChatService {
             content: userdata.chat.data[0].content,
         }];
 
-        if (!isDirectMessage) {
+        if (isDirectMessage) {
+            const webToolInstruction = this.#aichatBuildWebSearchToolInstruction();
+            if (webToolInstruction) {
+                messages.push({ role: this.#ai().system, content: webToolInstruction });
+            }
+        } else {
             messages.push({ role: this.#ai().system, content: this.config.BOT_PRIVATE });
         }
 
@@ -550,7 +558,79 @@ export class ChatService {
             messages.push({ role: this.#ai().system, content: userMemoryContext });
         }
 
+        if (extraSystemMessages.length > 0) {
+            messages.push(...extraSystemMessages);
+        }
+
         return [...messages, ...recentDialog];
+    }
+
+    #aichatCleanupOutput(output) {
+        return String(output || '')
+            .replace(/\(\[.+\]\s*\(http.+\)\)/i, '')
+            .replace(/\[(.+)\]\s*\(http.+\)/i, '$1')
+            .trim();
+    }
+
+    #aichatBuildWebSearchToolInstruction() {
+        if (!this.webSearch.isEnabled()) {
+            return null;
+        }
+
+        return [
+            'IMPORTANT: WEB_SEARCH tool.',
+            'If you need current or external factual information to answer correctly, reply with exactly one line in this format and nothing else:',
+            '[WEB_SEARCH] concise search query',
+            'If the existing context is enough, answer normally.',
+        ].join('\n');
+    }
+
+    #aichatParseToolRequest(output) {
+        const match = String(output || '').trim().match(WEB_SEARCH_TOOL_PATTERN);
+        if (!match) {
+            return null;
+        }
+
+        const query = this.#memoryNormalizeText(match[1], 140);
+        if (query.length < 3) {
+            return null;
+        }
+
+        return {
+            tool: 'WEB_SEARCH',
+            query,
+        };
+    }
+
+    #aichatIsUnknownOutput(output) {
+        return output.length === 0
+            || output.includes('[IDK]')
+            || output.includes('не могу обсуждать');
+    }
+
+    async #aichatGenerate(messages) {
+        const response = await this.brainClient.chat.completions.create({
+            model: this.#ai().model,
+            messages,
+        });
+        return this.#aichatCleanupOutput(choose(response.choices).message.content);
+    }
+
+    async #aichatRunWebSearchTool(channel, query) {
+        const webContext = await this.webSearch.buildContext(query);
+        if (!webContext) {
+            return [
+                `WEB_SEARCH results for "${query}": no reliable results found.`,
+                'No additional web searches are available in this turn. Answer from the existing context or reply with [IDK].',
+            ].join('\n\n');
+        }
+
+        console.log(`[WebSearch][${channel}] ${webContext.query}`);
+        return [
+            `WEB_SEARCH results for "${webContext.query}":`,
+            webContext.context,
+            'No additional web searches are available in this turn. Use these results if helpful and answer the user directly.',
+        ].join('\n\n');
     }
 
     async #aichatProcess(channel, uuid, callback, isDirectMessage) {
@@ -565,17 +645,19 @@ export class ChatService {
         const messages = await this.#aichatBuildMessages(channel, uuid, isDirectMessage, memoryQuery, username);
 
         try {
-            const response = await this.brainClient.chat.completions.create({
-                model: this.#ai().model,
-                messages,
-            });
-            const output = (choose(response.choices).message.content || '')
-                .replace(/\(\[.+\]\s*\(http.+\)\)/i, '')
-                .replace(/\[(.+)\]\s*\(http.+\)/i, '$1')
-                .trim();
-            if (output.length === 0 || output.includes('[IDK]') || output.includes('не могу обсуждать')) {
+            let output = await this.#aichatGenerate(messages);
+            const toolRequest = this.#aichatParseToolRequest(output);
+            if (toolRequest?.tool === 'WEB_SEARCH') {
+                const toolResult = await this.#aichatRunWebSearchTool(channel, toolRequest.query);
+                output = await this.#aichatGenerate([
+                    ...messages,
+                    { role: 'assistant', content: output },
+                    { role: this.#ai().system, content: toolResult },
+                ]);
+            }
+            if (output == null || this.#aichatParseToolRequest(output) || this.#aichatIsUnknownOutput(output)) {
                 const data = userdata.chat.data;
-                console.log(`[OpenAI][${channel}] ${output} | ${data[data.length - 1].content}`);
+                console.log(`[OpenAI][${channel}] ${output || '[IDK]'} | ${data[data.length - 1].content}`);
                 return;
             }
 

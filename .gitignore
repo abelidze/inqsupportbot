@@ -2,4 +2,8 @@
 /data
 /config
 /node_modules
+/searxng/.cache/
+/searxng/.venv/
+/searxng/runtime/
+/searxng/source/
 *.sublime*
