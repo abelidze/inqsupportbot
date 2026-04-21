@@ -11,6 +11,39 @@ import { TwitchService } from './services/twitch.js';
 import { WebSocketService } from './services/web.js';
 import { YoutubeService } from './services/youtube.js';
 
+const applyEnvOverrides = () => {
+    if (process.env.REDIS_HOST) {
+        config.REDIS_HOST = process.env.REDIS_HOST;
+    }
+
+    if (process.env.REDIS_PORT) {
+        const redisPort = Number.parseInt(process.env.REDIS_PORT, 10);
+        if (!Number.isNaN(redisPort)) {
+            config.REDIS_PORT = redisPort;
+        }
+    }
+
+    if (process.env.REDIS_PASS) {
+        config.REDIS_PASS = process.env.REDIS_PASS;
+    }
+
+    if (process.env.API_BASE_URL) {
+        config.API_OPTIONS.baseURL = process.env.API_BASE_URL;
+    }
+
+    if (config.TWITCH?.eventsub) {
+        if (process.env.TWITCH_EVENTSUB_HOST) {
+            config.TWITCH.eventsub.host = process.env.TWITCH_EVENTSUB_HOST;
+        }
+
+        if (process.env.TWITCH_EVENTSUB_PATH) {
+            config.TWITCH.eventsub.path = process.env.TWITCH_EVENTSUB_PATH;
+        }
+    }
+};
+
+applyEnvOverrides();
+
 const backendClient = new HttpClient(config.API_OPTIONS);
 const youtubeClient = new YoutubeClient(config.YOUTUBE);
 const discordClient = new discord.Client({
