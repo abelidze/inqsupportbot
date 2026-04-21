@@ -25,6 +25,12 @@ const MEMORY_SNIPPET_LIMIT = 180;
 const MEMORY_MIN_MESSAGE_LENGTH = 20;
 const MAX_EXTRACTED_MEMORIES = 3;
 const WEB_SEARCH_TOOL_PATTERN = /^\[WEB_SEARCH\]\s*(.+)$/i;
+const DEFAULT_AI_TIMEOUT_MS = 60000;
+
+const parseTimeoutMs = (value, fallback) => {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
 
 export class ChatService {
     constructor({ config, backendClient, getLastSongText }) {
@@ -53,7 +59,7 @@ export class ChatService {
             apiKey: this.#ai().key,
             baseURL: this.#ai().url,
             project: this.#ai().project,
-            timeout: 10000,
+            timeout: parseTimeoutMs(process.env.AI_TIMEOUT_MS, DEFAULT_AI_TIMEOUT_MS),
         });
     }
 

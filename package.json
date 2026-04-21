@@ -8,7 +8,7 @@
         "node": ">=22.0.0"
     },
     "scripts": {
-        "chat": "set \"WEB_SEARCH_SEARXNG_URL=http://127.0.0.1:8891\" && node server.js",
+        "chat": "set \"SEARXNG_URL=http://127.0.0.1:8891\" && node server.js",
         "redis": "start redis-server config/redis.win.conf",
         "search": "powershell -ExecutionPolicy Bypass -File .\\searxng\\run-dev.ps1",
         "start": "yarn install && bash loopbot.sh",
