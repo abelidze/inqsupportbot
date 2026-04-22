@@ -26,6 +26,7 @@ const MEMORY_MIN_MESSAGE_LENGTH = 20;
 const MAX_EXTRACTED_MEMORIES = 3;
 const WEB_SEARCH_TOOL_PATTERN = /^\[WEB_SEARCH\]\s*(.+)$/i;
 const DEFAULT_AI_TIMEOUT_MS = 60000;
+const WEB_SEARCH_TOOL_NAME = 'web_search';
 
 const parseTimeoutMs = (value, fallback) => {
     const parsed = Number.parseInt(String(value ?? ''), 10);
@@ -45,6 +46,7 @@ export class ChatService {
             userWindow: USER_THREAD_LIMIT,
             memoryHits: MEMORY_QUERY_LIMIT,
         };
+        this.backendToolSupport = {};
         this.webSearch = new WebSearchService({ config });
         this.userMemoryStore = this.#createUserMemoryStore();
         this.userMemoryQueue = Promise.resolve();
@@ -150,7 +152,7 @@ export class ChatService {
 
         if (timestamp - userdata.throttle < this.questionThrottle.limit) {
             setTimeout(
-                () => this.#aichatProcess(channel, uuid, callback, isCommand),
+                () => this.#aichatProcess(channel, uuid, callback),
                 timestamp - userdata.throttle + 500,
             );
             this.#aichatMessage(userdata.chat, username, msg);
@@ -174,7 +176,7 @@ export class ChatService {
 
         userdata.throttle = timestamp;
         this.#aichatMessage(userdata.chat, username, msg);
-        this.#aichatProcess(channel, uuid, callback, isCommand);
+        this.#aichatProcess(channel, uuid, callback);
         return true;
     }
 
@@ -536,7 +538,7 @@ export class ChatService {
         }
     }
 
-    async #aichatBuildMessages(channel, uuid, isDirectMessage, memoryQuery, username, extraSystemMessages = []) {
+    async #aichatBuildMessages(channel, uuid, memoryQuery, username, extraSystemMessages = []) {
         const userdata = this.questionThrottle.users[uuid];
         this.#aichatBump(userdata.chat);
         const recentDialog = this.#aichatRecentDialog(userdata.chat);
@@ -545,13 +547,10 @@ export class ChatService {
             content: userdata.chat.data[0].content,
         }];
 
-        if (isDirectMessage) {
-            const webToolInstruction = this.#aichatBuildWebSearchToolInstruction();
-            if (webToolInstruction) {
-                messages.push({ role: this.#ai().system, content: webToolInstruction });
-            }
-        } else {
-            messages.push({ role: this.#ai().system, content: this.config.BOT_PRIVATE });
+        messages.push({ role: this.#ai().system, content: this.config.BOT_PRIVATE });
+        const webToolInstruction = this.#aichatBuildWebSearchToolInstruction();
+        if (webToolInstruction) {
+            messages.push({ role: this.#ai().system, content: webToolInstruction });
         }
 
         const channelContext = this.#aichatBuildChannelContext(channel, recentDialog);
@@ -585,10 +584,62 @@ export class ChatService {
 
         return [
             'IMPORTANT: WEB_SEARCH tool.',
-            'If you need current or external factual information to answer correctly, reply with exactly one line in this format and nothing else:',
+            'Use the available web_search tool whenever you need current or external factual information to answer correctly.',
+            'If your backend cannot call tools natively, reply with exactly one line in this format and nothing else:',
             '[WEB_SEARCH] concise search query',
             'If the existing context is enough, answer normally.',
         ].join('\n');
+    }
+
+    #aichatBuildNativeTools() {
+        if (!this.webSearch.isEnabled()) {
+            return [];
+        }
+
+        return [{
+            type: 'function',
+            function: {
+                name: WEB_SEARCH_TOOL_NAME,
+                description: 'Search the web for current or external information that is missing from the chat context.',
+                parameters: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                        query: {
+                            type: 'string',
+                            description: 'A concise search engine query for the missing information.',
+                        },
+                    },
+                    required: ['query'],
+                },
+            },
+        }];
+    }
+
+    #aichatNativeToolsEnabled() {
+        if (!this.webSearch.isEnabled()) {
+            return false;
+        }
+
+        return this.backendToolSupport[this.config.BOT_AI] !== false;
+    }
+
+    #aichatMarkNativeToolsUnsupported() {
+        this.backendToolSupport[this.config.BOT_AI] = false;
+    }
+
+    #aichatLooksLikeToolSupportError(error) {
+        const message = String(error?.message || error?.data?.error?.message || error || '').toLowerCase();
+        return (
+            message.includes('tool_choice')
+            || message.includes('tool_calls')
+            || message.includes('tools')
+            || message.includes('function calling')
+            || message.includes('function call')
+            || message.includes('unknown parameter')
+            || message.includes('extra fields not permitted')
+            || message.includes('not supported')
+        );
     }
 
     #aichatParseToolRequest(output) {
@@ -608,18 +659,79 @@ export class ChatService {
         };
     }
 
+    #aichatParseNativeToolRequest(message) {
+        const toolCall = (message?.tool_calls || []).find((call) =>
+            call?.type === 'function'
+            && String(call?.function?.name || '').toLowerCase() === WEB_SEARCH_TOOL_NAME
+        );
+        if (!toolCall) {
+            return null;
+        }
+
+        let args = {};
+        try {
+            args = JSON.parse(toolCall.function.arguments || '{}');
+        } catch {
+            args = {};
+        }
+
+        const query = this.#memoryNormalizeText(args.query || args.q || '', 140);
+        if (query.length < 3) {
+            return null;
+        }
+
+        return {
+            tool: 'WEB_SEARCH',
+            query,
+            toolCallId: toolCall.id,
+        };
+    }
+
     #aichatIsUnknownOutput(output) {
         return output.length === 0
             || output.includes('[IDK]')
             || output.includes('не могу обсуждать');
     }
 
-    async #aichatGenerate(messages) {
-        const response = await this.brainClient.chat.completions.create({
+    async #aichatGenerate(messages, allowNativeTools = true) {
+        const request = {
             model: this.#ai().model,
             messages,
-        });
-        return this.#aichatCleanupOutput(choose(response.choices).message.content);
+        };
+        const tools = allowNativeTools ? this.#aichatBuildNativeTools() : [];
+
+        try {
+            if (tools.length > 0 && this.#aichatNativeToolsEnabled()) {
+                request.tools = tools;
+                request.tool_choice = 'auto';
+            }
+
+            const response = await this.brainClient.chat.completions.create(request);
+            const message = choose(response.choices).message || {};
+            return {
+                output: this.#aichatCleanupOutput(message.content),
+                toolRequest: this.#aichatParseNativeToolRequest(message) || this.#aichatParseToolRequest(message.content),
+                assistantMessage: message,
+            };
+        } catch (error) {
+            if (
+                request.tools
+                && this.#aichatLooksLikeToolSupportError(error)
+            ) {
+                this.#aichatMarkNativeToolsUnsupported();
+                const response = await this.brainClient.chat.completions.create({
+                    model: this.#ai().model,
+                    messages,
+                });
+                const message = choose(response.choices).message || {};
+                return {
+                    output: this.#aichatCleanupOutput(message.content),
+                    toolRequest: this.#aichatParseToolRequest(message.content),
+                    assistantMessage: message,
+                };
+            }
+            throw error;
+        }
     }
 
     async #aichatRunWebSearchTool(channel, query) {
@@ -639,7 +751,7 @@ export class ChatService {
         ].join('\n\n');
     }
 
-    async #aichatProcess(channel, uuid, callback, isDirectMessage) {
+    async #aichatProcess(channel, uuid, callback) {
         const userdata = this.questionThrottle.users[uuid];
         if (!userdata || this.#aichatIsEmpty(userdata.chat)) {
             return;
@@ -648,20 +760,35 @@ export class ChatService {
         const memoryQuery = userdata.lastPrompt;
         const rawPrompt = userdata.lastRawMessage;
         const username = userdata.username;
-        const messages = await this.#aichatBuildMessages(channel, uuid, isDirectMessage, memoryQuery, username);
+        const messages = await this.#aichatBuildMessages(channel, uuid, memoryQuery, username);
 
         try {
-            let output = await this.#aichatGenerate(messages);
-            const toolRequest = this.#aichatParseToolRequest(output);
+            let { output, toolRequest, assistantMessage } = await this.#aichatGenerate(messages);
             if (toolRequest?.tool === 'WEB_SEARCH') {
                 const toolResult = await this.#aichatRunWebSearchTool(channel, toolRequest.query);
-                output = await this.#aichatGenerate([
-                    ...messages,
-                    { role: 'assistant', content: output },
-                    { role: this.#ai().system, content: toolResult },
-                ]);
+                if (toolRequest.toolCallId) {
+                    ({ output, toolRequest, assistantMessage } = await this.#aichatGenerate([
+                        ...messages,
+                        {
+                            role: 'assistant',
+                            content: assistantMessage?.content || '',
+                            tool_calls: assistantMessage?.tool_calls,
+                        },
+                        {
+                            role: 'tool',
+                            tool_call_id: toolRequest.toolCallId,
+                            content: toolResult,
+                        },
+                    ], false));
+                } else {
+                    ({ output, toolRequest } = await this.#aichatGenerate([
+                        ...messages,
+                        { role: 'assistant', content: output },
+                        { role: this.#ai().system, content: toolResult },
+                    ], false));
+                }
             }
-            if (output == null || this.#aichatParseToolRequest(output) || this.#aichatIsUnknownOutput(output)) {
+            if (output == null || toolRequest || this.#aichatIsUnknownOutput(output)) {
                 const data = userdata.chat.data;
                 console.log(`[OpenAI][${channel}] ${output || '[IDK]'} | ${data[data.length - 1].content}`);
                 return;
