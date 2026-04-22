@@ -90,9 +90,10 @@ const discordService = new DiscordService({
     discordClient,
 });
 const youtubeService = new YoutubeService({ config, youtubeClient, chatService });
-// const controlService = new ControlService({ config });
+const controlService = new ControlService({ config });
 
 const main = () => {
+    controlService.start();
     webSocketService.start();
     donationAlertsService.start();
     chatService.updateData();
