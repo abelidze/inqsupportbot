@@ -7,6 +7,7 @@ echo "###########################################"
 
 while true
 do
+node sync-config.js
 node server.js
 echo "[CRASH!]"
 echo "Rebooting in:"

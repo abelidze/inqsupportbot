@@ -4,6 +4,7 @@ import { HttpClient } from './utils.js';
 import { YoutubeClient } from './api/youtube.js';
 import { BroadcastService } from './services/broadcast.js';
 import { ChatService } from './services/chat.js';
+import { ConfigSyncService } from './services/config-sync.js';
 import { ControlService } from './services/control.js';
 import { DiscordService } from './services/discord.js';
 import { DonationAlertsService } from './services/alerts.js';
@@ -90,10 +91,12 @@ const discordService = new DiscordService({
     discordClient,
 });
 const youtubeService = new YoutubeService({ config, youtubeClient, chatService });
+const configSyncService = new ConfigSyncService({ config });
 const controlService = new ControlService({ config });
 
-const main = () => {
+const main = async () => {
     controlService.start();
+    await configSyncService.start();
     webSocketService.start();
     donationAlertsService.start();
     chatService.updateData();
@@ -102,4 +105,7 @@ const main = () => {
     discordService.start();
 };
 
-main();
+main().catch((error) => {
+    console.error('[Server:FATAL]', error);
+    process.exit(1);
+});
