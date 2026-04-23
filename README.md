@@ -1,14 +1,14 @@
 About InqSupportBot
 ===================
 
-InqSupportBot is a chatbot integrated with dialogflow as backend and discord / twitch / socket.io (for website) as frontend.
+InqSupportBot is a chatbot integrated with dialogflow as backend and discord / twitch / telegram / socket.io (for website) as frontend.
 
 
 How it works
 ------------
 
-This bot uses multiple requests flows - redis / socket.io, twitch and discord.<br />
-Twitch / Discord integration is simple - it redirects all request to dialogflow, takes response and sends answer.
+This bot uses multiple requests flows - redis / socket.io, twitch, discord and telegram.<br />
+Twitch / Discord / Telegram integration is simple - it redirects all request to AI agent, takes response and sends answer.
 
 Redis / Socket.IO integration otherwise is more complex.<br />
 To make it working you must provide:
@@ -102,6 +102,13 @@ module.exports = {
     REDIS_HOST: '<REDIS_HOST>',
     REDIS_PORT: REDIS_PORT,
     DISCORD_TOKEN: '<DISCORD_BOT_TOKEN>',
+    TELEGRAM: {
+        TOKEN: '<TELEGRAM_BOT_TOKEN>',
+        DEFAULT_CHANNEL: '<TWITCH_CHANNEL_NAME_1>',
+        CHAT_CONTEXTS: {
+            '<TELEGRAM_CHAT_ID>': '<TWITCH_CHANNEL_NAME_1>'
+        }
+    },
     PROJECT_ID: '<DIALOGFLOW_PROJECT_ID>',
     CHANNEL: '<DISCORD_CHANNEL_SNOWFLAKE_ID>',
 }
@@ -117,6 +124,8 @@ module.exports = {
 * `REDIS_HOST` - redis-server host, used for website integration;
 * `REDIS_PORT` - redis-server port, used for website integration;
 * `DISCORD_BOT_TOKEN` - your discord bot secret token, used for all discord integrations;
+* `TELEGRAM_BOT_TOKEN` - your Telegram bot token from BotFather;
+* `TELEGRAM_CHAT_ID` - optional Telegram chat id for mapping a group chat to a specific Twitch streamer context;
 * `DISCORD_CHANNEL_SNOWFLAKE_ID` - currently discord bot can serve only one channel by its id.
 * `YOUTUBE_CLIENT_ID` - YouTube Data API v3 Client-ID
 * `YOUTUBE_CLIENT_SECRET` - YouTube Data API v3 Client-Secret

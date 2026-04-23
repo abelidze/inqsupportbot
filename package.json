@@ -8,11 +8,11 @@
         "node": ">=22.0.0"
     },
     "scripts": {
-        "chat": "set \"SEARXNG_URL=http://127.0.0.1:8891\" && node sync-config.js && node server.js",
+        "chat": "set \"SEARXNG_URL=http://127.0.0.1:8891\" && node server.js",
         "redis": "start redis-server config/redis.win.conf",
         "search": "powershell -ExecutionPolicy Bypass -File .\\searxng\\run-dev.ps1",
         "start": "yarn install && bash loopbot.sh",
-        "watch": "node sync-config.js && node --watch server.js"
+        "watch": "node --watch server.js"
     },
     "description": "dialogflow:^0.8.0",
     "main": "server.js",
@@ -30,6 +30,7 @@
         "enmap": "^6.1.3",
         "jsdom": "^27.0.1",
         "mempalace-node": "^1.0.0",
+        "node-telegram-bot-api": "^0.67.0",
         "openai": "^5.12.2",
         "redis": "^2.8.0",
         "shortid": "^2.2.14",

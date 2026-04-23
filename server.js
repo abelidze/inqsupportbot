@@ -8,6 +8,7 @@ import { ConfigSyncService } from './services/config-sync.js';
 import { ControlService } from './services/control.js';
 import { DiscordService } from './services/discord.js';
 import { DonationAlertsService } from './services/alerts.js';
+import { TelegramService } from './services/telegram.js';
 import { TwitchService } from './services/twitch.js';
 import { WebSocketService } from './services/web.js';
 import { YoutubeService } from './services/youtube.js';
@@ -91,6 +92,7 @@ const discordService = new DiscordService({
     discordClient,
 });
 const youtubeService = new YoutubeService({ config, youtubeClient, chatService });
+const telegramService = new TelegramService({ config, chatService });
 const configSyncService = new ConfigSyncService({ config });
 const controlService = new ControlService({ config });
 
@@ -103,6 +105,7 @@ const main = async () => {
     youtubeService.start();
     twitchService.start();
     discordService.start();
+    telegramService.start();
 };
 
 main().catch((error) => {

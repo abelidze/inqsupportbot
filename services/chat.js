@@ -89,7 +89,8 @@ export class ChatService {
         }
     }
 
-    async questionHandler(channel, uuid, username, msg, callback) {
+    async questionHandler(channel, uuid, username, msg, callback, options = {}) {
+        const promptChannel = this.#resolvePromptChannel(channel, options);
         let tokens = null;
         let isCommand = false;
         this.#aichatRememberChannel(channel, username, msg);
@@ -114,17 +115,20 @@ export class ChatService {
         if (this.questionThrottle.users[uuid] === undefined) {
             this.questionThrottle.users[uuid] = {
                 throttle: timestamp - this.questionThrottle.limit * 2,
-                chat: this.#aichatCreate(channel),
+                chat: this.#aichatCreate(channel, promptChannel),
                 lastPrompt: null,
                 lastRawMessage: null,
                 username,
             };
         }
 
-        const streamer = this.config.TWITCH.streamers[channel];
         const userdata = this.questionThrottle.users[uuid];
+        if (userdata.chat.channel !== channel || userdata.chat.promptChannel !== promptChannel) {
+            userdata.chat = this.#aichatCreate(channel, promptChannel);
+        }
         userdata.username = username;
-        tokens = tokens || (streamer && msg.match(streamer.regex) ? [msg] : null);
+        const streamer = this.config.TWITCH.streamers[promptChannel];
+        tokens = tokens || (options.forceTrigger ? [msg] : (streamer && msg.match(streamer.regex) ? [msg] : null));
         const memoryMessage = isCommand
             ? msg
             : (tokens === null ? msg : tokens[tokens.length - 1].trim());
@@ -184,6 +188,24 @@ export class ChatService {
         return answer.action === 'input.unknown'
             || answer.intent.startsWith('smalltalk')
             || (!answer.command && answer.intent.startsWith('private'));
+    }
+
+    #resolvePromptChannel(channel, options = {}) {
+        const promptChannel = String(options.promptChannel || '').trim();
+        if (promptChannel.length > 0) {
+            return promptChannel;
+        }
+
+        if (this.config.TWITCH?.streamers?.[channel]) {
+            return channel;
+        }
+
+        const fallback = String(this.config.TWITCH?.channels?.[0] || '').trim();
+        if (fallback.length > 0) {
+            return fallback.startsWith('#') ? fallback.slice(1) : fallback;
+        }
+
+        return channel;
     }
 
     #ai() {
@@ -294,14 +316,15 @@ export class ChatService {
         }
     }
 
-    #aichatCreate(channel) {
+    #aichatCreate(channel, promptChannel = channel) {
         return {
             bump: 0,
             size: 0,
             channel,
+            promptChannel,
             data: [{
                 role: this.#ai().system,
-                content: template(this.config.BOT_CONTEXT, this.streamerData[channel]),
+                content: template(this.config.BOT_CONTEXT, this.streamerData[promptChannel]),
             }],
         };
     }
@@ -329,7 +352,7 @@ export class ChatService {
     }
 
     #aichatBump(chat) {
-        chat.data[0].content = template(this.config.BOT_CONTEXT, this.streamerData[chat.channel]);
+        chat.data[0].content = template(this.config.BOT_CONTEXT, this.streamerData[chat.promptChannel || chat.channel]);
         chat.bump = chat.size;
     }
 
