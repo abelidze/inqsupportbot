@@ -74,18 +74,25 @@ export class WebSearchService {
                 .map((result) => this.#fetchResultContent(result)),
         );
 
+        const contextParts = [
+            'Current web research for the user question. Use these facts only if they help answer accurately.',
+            'Do not mention that you performed a web search unless the user explicitly asks.',
+            `Search query: ${query}`,
+        ];
         const sections = [];
-        let totalLength = 0;
         for (const [index, result] of fetchedResults.entries()) {
-            const section = this.#buildResultSection(index, result);
+            const remainingResults = fetchedResults.length - index;
+            const remainingBudget = this.config.maxContextLength - this.#joinedLength(contextParts);
+            const sectionBudget = Math.floor(remainingBudget / Math.max(remainingResults, 1));
+            const section = this.#buildResultSection(index, result, sectionBudget);
             if (!section) {
                 continue;
             }
-            if (sections.length > 0 && totalLength + section.length > this.config.maxContextLength) {
+            if (this.#joinedLength(contextParts, section) > this.config.maxContextLength) {
                 break;
             }
             sections.push(section);
-            totalLength += section.length;
+            contextParts.push(section);
         }
 
         if (sections.length === 0) {
@@ -94,12 +101,30 @@ export class WebSearchService {
 
         return {
             query,
+            context: contextParts.join('\n\n'),
+        };
+    }
+
+    async buildFetchContext(url) {
+        const normalizedUrl = this.#normalizeResultUrl(url);
+        if (!this.isEnabled() || !normalizedUrl) {
+            return null;
+        }
+
+        const result = await this.#fetchWebContentResult(normalizedUrl);
+        if (!result?.content) {
+            return null;
+        }
+
+        return {
+            url: normalizedUrl,
+            source: result.source,
             context: [
-                'Current web research for the user question. Use these facts only if they help answer accurately.',
-                'Do not mention that you performed a web search unless the user explicitly asks.',
-                `Search query: ${query}`,
-                ...sections,
-            ].join('\n\n'),
+                'Fetched web page for the user question. Use these facts only if they help answer accurately.',
+                `URL: ${normalizedUrl}`,
+                `Fetch source: ${result.source}`,
+                `Page extract: ${result.content}`,
+            ].join('\n'),
         };
     }
 
@@ -205,23 +230,35 @@ export class WebSearchService {
     }
 
     async #fetchWebContent(url) {
+        const result = await this.#fetchWebContentResult(url);
+        return result?.content || '';
+    }
+
+    async #fetchWebContentResult(url) {
         const directContent = await this.#fetchDirectWebContent(url);
         if (directContent) {
-            return directContent;
+            return {
+                content: directContent,
+                source: 'direct',
+            };
         }
 
         if (this.config.readerFallbackEnabled) {
             const readerContent = await this.#fetchReaderContent(url);
             if (readerContent) {
-                return readerContent;
+                return {
+                    content: readerContent,
+                    source: 'reader-fallback',
+                };
             }
         }
 
-        return '';
+        return null;
     }
 
     async #fetchDirectWebContent(url) {
         try {
+            console.log('[WebFetch]', url);
             const response = await fetch(url, {
                 headers: {
                     'user-agent': this.config.userAgent,
@@ -246,6 +283,7 @@ export class WebSearchService {
     async #fetchReaderContent(url) {
         try {
             const readerUrl = this.#buildReaderUrl(url);
+            console.log('[WebFetch]', readerUrl);
             const response = await fetch(readerUrl, {
                 headers: {
                     'user-agent': this.config.userAgent,
@@ -332,7 +370,7 @@ export class WebSearchService {
         );
     }
 
-    #buildResultSection(index, result) {
+    #buildResultSection(index, result, limit = Infinity) {
         const title = result.title || result.url;
         const host = this.#getHost(result.url);
         const snippet = result.snippet || '';
@@ -342,13 +380,14 @@ export class WebSearchService {
         }
 
         const lines = [`[${index + 1}] ${title}${host ? ` (${host})` : ''}`];
+        lines.push(`URL: ${result.url}`);
         if (snippet) {
-            lines.push(`Snippet: ${snippet}`);
+            this.#appendLimitedLine(lines, 'Snippet: ', snippet, limit);
         }
         if (content && content !== snippet) {
-            lines.push(`Page extract: ${content}`);
+            this.#appendLimitedLine(lines, 'Page extract: ', content, limit);
         }
-        return lines.join('\n');
+        return lines.length > 1 ? lines.join('\n') : null;
     }
 
     #getHost(value) {
@@ -368,6 +407,32 @@ export class WebSearchService {
     #parsePositiveInt(value, fallback) {
         const parsed = Number.parseInt(String(value ?? ''), 10);
         return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    #appendLimitedLine(lines, label, text, limit) {
+        const normalized = this.#normalizeText(text);
+        if (!normalized) {
+            return false;
+        }
+
+        if (!Number.isFinite(limit)) {
+            lines.push(`${label}${normalized}`);
+            return true;
+        }
+
+        const usedLength = lines.join('\n').length + 1 + label.length;
+        const availableLength = Math.floor(limit - usedLength);
+        if (availableLength < 80) {
+            return false;
+        }
+
+        lines.push(`${label}${this.#trim(normalized, availableLength)}`);
+        return true;
+    }
+
+    #joinedLength(parts, extra = null) {
+        const joined = extra === null ? parts : [...parts, extra];
+        return joined.join('\n\n').length;
     }
 
     #trim(text, limit) {

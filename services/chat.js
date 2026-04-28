@@ -6,10 +6,13 @@ import { WebSearchService } from './search.js';
 
 const CHANNEL_CONTEXT_LIMIT = 8;
 const USER_THREAD_LIMIT = 8;
-const WEB_SEARCH_TOOL_PATTERN = /^\[WEB_SEARCH\]\s*(.+)$/i;
+const WEB_TEXT_TOOL_PATTERN = /^\[(WEB_SEARCH|WEB_FETCH)\]\s+(.+)$/i;
 const CHAT_AUTHOR_PREFIX_PATTERN = /^@[\p{L}\p{N}_.-]{1,32}\s*[:：]\s*/u;
 const DEFAULT_AI_TIMEOUT_MS = 60000;
+const DEFAULT_WEB_TOOL_BUDGET_MS = 25000;
+const DEFAULT_WEB_TOOL_MAX_CALLS = 8;
 const WEB_SEARCH_TOOL_NAME = 'web_search';
+const WEB_FETCH_TOOL_NAME = 'web_fetch';
 
 const parseTimeoutMs = (value, fallback) => {
     const parsed = Number.parseInt(String(value ?? ''), 10);
@@ -32,6 +35,14 @@ export class ChatService {
         };
         this.backendToolSupport = {};
         this.webSearch = new WebSearchService({ config });
+        this.webToolBudgetMs = parseTimeoutMs(
+            config.WEB_SEARCH?.toolBudgetMs,
+            DEFAULT_WEB_TOOL_BUDGET_MS,
+        );
+        this.webToolMaxCalls = parseTimeoutMs(
+            config.WEB_SEARCH?.maxToolCalls,
+            DEFAULT_WEB_TOOL_MAX_CALLS,
+        );
         this.memory = new MemoryService({ config });
         this.questionThrottle = {
             users: {},
@@ -427,10 +438,13 @@ export class ChatService {
         }
 
         return [
-            'IMPORTANT: WEB_SEARCH tool.',
-            'Use the available web_search tool whenever you need current or external factual information to answer correctly.',
-            'If your backend cannot call tools natively, reply with exactly one line in this format and nothing else:',
+            'IMPORTANT: web tools.',
+            'Use web_search whenever you need current or external factual information to answer correctly.',
+            'Use web_fetch when you have a concrete URL from search results or the user and need to read that page.',
+            `You may request multiple web tools in this turn while the ${Math.round(this.webToolBudgetMs / 1000)}s live-chat web budget remains. Avoid unnecessary searches.`,
+            'If your backend cannot call tools natively, reply with exactly one line in one of these formats and nothing else:',
             '[WEB_SEARCH] concise search query',
+            '[WEB_FETCH] https://example.com/page',
             'If the existing context is enough, answer normally.',
         ].join('\n');
     }
@@ -440,24 +454,44 @@ export class ChatService {
             return [];
         }
 
-        return [{
-            type: 'function',
-            function: {
-                name: WEB_SEARCH_TOOL_NAME,
-                description: 'Search the web for current or external information that is missing from the chat context.',
-                parameters: {
-                    type: 'object',
-                    additionalProperties: false,
-                    properties: {
-                        query: {
-                            type: 'string',
-                            description: 'A concise search engine query for the missing information.',
+        return [
+            {
+                type: 'function',
+                function: {
+                    name: WEB_SEARCH_TOOL_NAME,
+                    description: 'Search the web for current or external information that is missing from the chat context.',
+                    parameters: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                            query: {
+                                type: 'string',
+                                description: 'A concise search engine query for the missing information.',
+                            },
                         },
+                        required: ['query'],
                     },
-                    required: ['query'],
                 },
             },
-        }];
+            {
+                type: 'function',
+                function: {
+                    name: WEB_FETCH_TOOL_NAME,
+                    description: 'Fetch and extract readable text from a specific URL using direct access with reader fallback.',
+                    parameters: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                            url: {
+                                type: 'string',
+                                description: 'The absolute http or https URL to fetch.',
+                            },
+                        },
+                        required: ['url'],
+                    },
+                },
+            },
+        ];
     }
 
     #aichatNativeToolsEnabled() {
@@ -487,48 +521,64 @@ export class ChatService {
     }
 
     #aichatParseToolRequest(output) {
-        const match = String(output || '').trim().match(WEB_SEARCH_TOOL_PATTERN);
+        const match = String(output || '').trim().match(WEB_TEXT_TOOL_PATTERN);
         if (!match) {
             return null;
         }
 
-        const query = normalizeMemoryText(match[1], 140);
-        if (query.length < 3) {
-            return null;
+        const toolName = String(match[1] || '').toUpperCase();
+        const value = normalizeMemoryText(match[2], toolName === 'WEB_FETCH' ? 500 : 140);
+
+        if (toolName === 'WEB_SEARCH' && value.length >= 3) {
+            return {
+                tool: 'WEB_SEARCH',
+                query: value,
+            };
         }
 
-        return {
-            tool: 'WEB_SEARCH',
-            query,
-        };
+        if (toolName === 'WEB_FETCH' && value.length >= 8) {
+            return {
+                tool: 'WEB_FETCH',
+                url: value,
+            };
+        }
+
+        return null;
     }
 
-    #aichatParseNativeToolRequest(message) {
-        const toolCall = (message?.tool_calls || []).find((call) =>
-            call?.type === 'function'
-            && String(call?.function?.name || '').toLowerCase() === WEB_SEARCH_TOOL_NAME
-        );
-        if (!toolCall) {
-            return null;
-        }
+    #aichatParseNativeToolRequests(message) {
+        return (message?.tool_calls || [])
+            .filter((call) => call?.type === 'function')
+            .map((call) => {
+                const functionName = String(call?.function?.name || '').toLowerCase();
+                if (![WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME].includes(functionName)) {
+                    return null;
+                }
 
-        let args = {};
-        try {
-            args = JSON.parse(toolCall.function.arguments || '{}');
-        } catch {
-            args = {};
-        }
+                let args = {};
+                try {
+                    args = JSON.parse(call.function.arguments || '{}');
+                } catch {
+                    args = {};
+                }
 
-        const query = normalizeMemoryText(args.query || args.q || '', 140);
-        if (query.length < 3) {
-            return null;
-        }
+                if (functionName === WEB_SEARCH_TOOL_NAME) {
+                    return {
+                        tool: 'WEB_SEARCH',
+                        query: normalizeMemoryText(args.query || args.q || '', 140),
+                        toolCallId: call.id,
+                        nativeCall: call,
+                    };
+                }
 
-        return {
-            tool: 'WEB_SEARCH',
-            query,
-            toolCallId: toolCall.id,
-        };
+                return {
+                    tool: 'WEB_FETCH',
+                    url: normalizeMemoryText(args.url || args.href || '', 500),
+                    toolCallId: call.id,
+                    nativeCall: call,
+                };
+            })
+            .filter(Boolean);
     }
 
     #aichatIsUnknownOutput(output) {
@@ -553,9 +603,15 @@ export class ChatService {
 
             const response = await this.brainClient.chat.completions.create(request);
             const message = choose(response.choices).message || {};
+            const nativeToolRequests = this.#aichatParseNativeToolRequests(message);
+            const textToolRequest = nativeToolRequests.length === 0
+                ? this.#aichatParseToolRequest(message.content)
+                : null;
             return {
                 output: this.#aichatCleanupOutput(message.content),
-                toolRequest: this.#aichatParseNativeToolRequest(message) || this.#aichatParseToolRequest(message.content),
+                toolRequests: nativeToolRequests.length > 0
+                    ? nativeToolRequests
+                    : (textToolRequest ? [textToolRequest] : []),
                 assistantMessage: message,
             };
         } catch (error) {
@@ -569,9 +625,10 @@ export class ChatService {
                     messages,
                 });
                 const message = choose(response.choices).message || {};
+                const textToolRequest = this.#aichatParseToolRequest(message.content);
                 return {
                     output: this.#aichatCleanupOutput(message.content),
-                    toolRequest: this.#aichatParseToolRequest(message.content),
+                    toolRequests: textToolRequest ? [textToolRequest] : [],
                     assistantMessage: message,
                 };
             }
@@ -580,19 +637,56 @@ export class ChatService {
     }
 
     async #aichatRunWebSearchTool(channel, query) {
+        if (query.length < 3) {
+            return 'WEB_SEARCH skipped: query is empty or too short.';
+        }
+
         console.log(`[WebSearch][${channel}] ${query}`);
         const webContext = await this.webSearch.buildContext(query);
         if (!webContext) {
             return [
                 `WEB_SEARCH results for "${query}": no reliable results found.`,
-                'No additional web searches are available in this turn. Answer from the existing context or reply with [IDK].',
+                'Try a more specific web_search query if needed and the live-chat web budget remains.',
             ].join('\n');
         }
         return [
             `WEB_SEARCH results for "${webContext.query}":`,
             webContext.context,
-            'No additional web searches are available in this turn. Use these results if helpful and answer the user directly.',
+            'Use these results if helpful. If a specific URL needs deeper reading, request web_fetch for that URL while the live-chat web budget remains.',
         ].join('\n');
+    }
+
+    async #aichatRunWebFetchTool(channel, url) {
+        console.log(`[WebFetchTool][${channel}] ${url}`);
+        const webContext = await this.webSearch.buildFetchContext(url);
+        if (!webContext) {
+            return [
+                `WEB_FETCH result for "${url}": no readable content found.`,
+                'Try another URL or a more specific web_search query if needed and the live-chat web budget remains.',
+            ].join('\n');
+        }
+
+        return [
+            `WEB_FETCH result for "${webContext.url}":`,
+            webContext.context,
+            'Use this page content if helpful. Request another web tool only if critical and the live-chat web budget remains.',
+        ].join('\n');
+    }
+
+    async #aichatRunWebTool(channel, toolRequest) {
+        if (toolRequest.tool === 'WEB_SEARCH') {
+            return this.#aichatRunWebSearchTool(channel, toolRequest.query || '');
+        }
+
+        if (toolRequest.tool === 'WEB_FETCH') {
+            return this.#aichatRunWebFetchTool(channel, toolRequest.url || '');
+        }
+
+        return `Unsupported web tool: ${toolRequest.tool || 'unknown'}`;
+    }
+
+    #aichatWebToolBudgetExpired(deadline, toolCallCount) {
+        return Date.now() >= deadline || toolCallCount >= this.webToolMaxCalls;
     }
 
     async #aichatProcess(channel, uuid, callback, isDirectMessage) {
@@ -607,31 +701,78 @@ export class ChatService {
         const messages = await this.#aichatBuildMessages(channel, uuid, memoryQuery, username, isDirectMessage);
 
         try {
-            let { output, toolRequest, assistantMessage } = await this.#aichatGenerate(messages);
-            if (toolRequest?.tool === 'WEB_SEARCH') {
-                const toolResult = await this.#aichatRunWebSearchTool(channel, toolRequest.query);
-                if (toolRequest.toolCallId) {
-                    ({ output, toolRequest, assistantMessage } = await this.#aichatGenerate([
-                        ...messages,
+            let activeMessages = messages;
+            let { output, toolRequests, assistantMessage } = await this.#aichatGenerate(activeMessages);
+            const webToolDeadline = Date.now() + this.webToolBudgetMs;
+            let webToolCallCount = 0;
+            let forcedFinalAnswer = false;
+
+            while (toolRequests.length > 0) {
+                if (this.#aichatWebToolBudgetExpired(webToolDeadline, webToolCallCount)) {
+                    if (forcedFinalAnswer) {
+                        output = null;
+                        break;
+                    }
+
+                    forcedFinalAnswer = true;
+                    activeMessages = [
+                        ...activeMessages,
+                        {
+                            role: this.#ai().system,
+                            content: 'The live-chat web tool time budget is exhausted. Answer now from the existing context or reply with [IDK]. Do not request more web tools.',
+                        },
+                    ];
+                    ({ output, toolRequests, assistantMessage } = await this.#aichatGenerate(activeMessages, false));
+                    continue;
+                }
+
+                const nativeToolRequests = toolRequests.filter((request) => request.toolCallId);
+                const textToolRequests = toolRequests.filter((request) => !request.toolCallId);
+                const toolResults = [];
+                for (const request of toolRequests) {
+                    webToolCallCount += 1;
+                    const content = this.#aichatWebToolBudgetExpired(webToolDeadline, webToolCallCount - 1)
+                        ? 'WEB tool skipped: live-chat web tool time budget is exhausted. Answer from existing context or reply with [IDK].'
+                        : await this.#aichatRunWebTool(channel, request);
+                    toolResults.push({ request, content });
+                }
+
+                if (nativeToolRequests.length > 0) {
+                    activeMessages = [
+                        ...activeMessages,
                         {
                             role: 'assistant',
                             content: assistantMessage?.content || '',
-                            tool_calls: assistantMessage?.tool_calls,
+                            tool_calls: nativeToolRequests.map((request) => request.nativeCall),
                         },
-                        {
-                            role: 'tool',
-                            tool_call_id: toolRequest.toolCallId,
-                            content: toolResult,
-                        },
-                    ], false));
-                } else {
-                    ({ output, toolRequest } = await this.#aichatGenerate([
-                        ...messages,
-                        { role: 'assistant', content: output },
-                        { role: this.#ai().system, content: toolResult },
-                    ], false));
+                        ...toolResults
+                            .filter(({ request }) => request.toolCallId)
+                            .map(({ request, content }) => ({
+                                role: 'tool',
+                                tool_call_id: request.toolCallId,
+                                content,
+                            })),
+                    ];
                 }
+
+                if (textToolRequests.length > 0) {
+                    activeMessages = [
+                        ...activeMessages,
+                        { role: 'assistant', content: output },
+                        {
+                            role: this.#ai().system,
+                            content: toolResults
+                                .filter(({ request }) => !request.toolCallId)
+                                .map(({ content }) => content)
+                                .join('\n\n'),
+                        },
+                    ];
+                }
+
+                const allowMoreTools = !this.#aichatWebToolBudgetExpired(webToolDeadline, webToolCallCount);
+                ({ output, toolRequests, assistantMessage } = await this.#aichatGenerate(activeMessages, allowMoreTools));
             }
+
             if (this.#aichatIsUnknownOutput(output)) {
                 const data = userdata.chat.data;
                 console.log(`[OpenAI][${channel}] ${output || '[IDK]'} | ${data[data.length - 1].content}`);
