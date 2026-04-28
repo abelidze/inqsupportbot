@@ -552,7 +552,8 @@ export class ChatService {
             }
 
             return [
-                `Relevant long-term memory about @${username}. Use it only if it helps answer naturally:`,
+                `[СПРАВОЧНЫЕ ФАКТЫ О ПОЛЬЗОВАТЕЛЕ @${username}]`,
+                `Используй эти факты ТОЛЬКО если они критически необходимы для ответа на АКТУАЛЬНЫЙ ВОПРОС. Иначе полностью игнорируй их:`,
                 ...lines,
             ].join('\n');
         } catch (error) {
@@ -590,7 +591,14 @@ export class ChatService {
             messages.push(...extraSystemMessages);
         }
 
-        return [...messages, ...recentDialog];
+        const dialog = [...recentDialog]; 
+        if (dialog.length > 0) {
+            const lastMessage = dialog.pop(); 
+            lastMessage.content = `[АКТУАЛЬНЫЙ ВОПРОС - ОТВЕЧАЙ ТОЛЬКО НА НЕГО]\n${lastMessage.content}\n\n[НАПОМИНАНИЕ ПРАВИЛ: Не повторяй вопрос в ответе. Если не знаешь ответ — выдай ровно слово [IDK]. Держи свой токсичный стиль.]`;
+            dialog.push(lastMessage);
+        }
+
+        return [...messages, ...dialog];
     }
 
     #aichatCleanupOutput(output) {
