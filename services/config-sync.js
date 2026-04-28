@@ -26,16 +26,16 @@ export class ConfigSyncService {
             const result = await syncRemoteConfig(this.config);
 
             if (result.changed) {
-                console.log('[ConfigSync] New remote config detected, restarting bot.');
+                console.log('[RemoteConfig] New remote config detected, restarting bot.');
                 process.exit(0);
                 return;
             }
 
             if (isInitial && result.reason === 'missing_base_url') {
-                console.log('[ConfigSync] Remote config sync disabled: API base URL is missing.');
+                console.log('[RemoteConfig] Remote config sync disabled: API base URL is missing.');
             }
         } catch (error) {
-            console.warn('[ConfigSync] Remote config check failed:', error?.message || error);
+            console.warn('[RemoteConfig] Remote config check failed:', error?.message || error);
         }
 
         this.timer = setTimeout(() => {

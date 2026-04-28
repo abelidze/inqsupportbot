@@ -135,9 +135,10 @@ export class ChatService {
             }
         }
 
+        const isDirectMessage = options.forceTrigger || isCommand;
         if (timestamp - userdata.throttle < this.questionThrottle.limit) {
             setTimeout(
-                () => this.#aichatProcess(channel, uuid, callback, isCommand),
+                () => this.#aichatProcess(channel, uuid, callback, isDirectMessage),
                 timestamp - userdata.throttle + 500,
             );
             this.#aichatMessage(userdata.chat, username, msg);
@@ -161,7 +162,7 @@ export class ChatService {
 
         userdata.throttle = timestamp;
         this.#aichatMessage(userdata.chat, username, msg);
-        this.#aichatProcess(channel, uuid, callback, isCommand);
+        this.#aichatProcess(channel, uuid, callback, isDirectMessage);
         return true;
     }
 
@@ -367,7 +368,7 @@ export class ChatService {
         ].join('\n');
     }
 
-    async #aichatBuildMessages(channel, uuid, memoryQuery, username, direct = false) {
+    async #aichatBuildMessages(channel, uuid, memoryQuery, username, isDirectMessage = false) {
         const userdata = this.questionThrottle.users[uuid];
         this.#aichatBump(userdata.chat);
         const recentDialog = this.#aichatRecentDialog(userdata.chat);
@@ -397,7 +398,7 @@ export class ChatService {
         }
 
         const dialog = [...recentDialog]; 
-        if (direct && dialog.length > 0) {
+        if (!isDirectMessage && dialog.length > 0) {
             const lastMessage = dialog.pop(); 
             lastMessage.content = [
                 '[АКТУАЛЬНЫЙ ВОПРОС - ОТВЕЧАЙ ТОЛЬКО НА НЕГО]',
@@ -531,7 +532,8 @@ export class ChatService {
     }
 
     #aichatIsUnknownOutput(output) {
-        return output.length === 0
+        return typeof output !== 'string'
+            || output.length === 0
             || output.includes('[IDK]')
             || output.includes('не могу обсуждать');
     }
@@ -593,7 +595,7 @@ export class ChatService {
         ].join('\n');
     }
 
-    async #aichatProcess(channel, uuid, callback, direct) {
+    async #aichatProcess(channel, uuid, callback, isDirectMessage) {
         const userdata = this.questionThrottle.users[uuid];
         if (!userdata || this.#aichatIsEmpty(userdata.chat)) {
             return;
@@ -602,7 +604,7 @@ export class ChatService {
         const memoryQuery = userdata.lastPrompt;
         const rawPrompt = userdata.lastRawMessage;
         const username = userdata.username;
-        const messages = await this.#aichatBuildMessages(channel, uuid, memoryQuery, username, direct);
+        const messages = await this.#aichatBuildMessages(channel, uuid, memoryQuery, username, isDirectMessage);
 
         try {
             let { output, toolRequest, assistantMessage } = await this.#aichatGenerate(messages);
@@ -630,7 +632,7 @@ export class ChatService {
                     ], false));
                 }
             }
-            if (output == null || toolRequest || this.#aichatIsUnknownOutput(output)) {
+            if (this.#aichatIsUnknownOutput(output)) {
                 const data = userdata.chat.data;
                 console.log(`[OpenAI][${channel}] ${output || '[IDK]'} | ${data[data.length - 1].content}`);
                 return;
