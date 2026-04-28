@@ -32,10 +32,19 @@ const readLocalConfigContent = async (configPath = CONFIG_PATH) => {
 
 export const getRemoteConfigSyncOptions = (config) => {
     const apiOptions = config?.API_OPTIONS || {};
+    const headers = { ...(apiOptions.headers || {}) };
+
+    if (process.env.CHATBOT_CONFIG_HOST_HEADER) {
+        headers.Host = process.env.CHATBOT_CONFIG_HOST_HEADER;
+    }
 
     return {
-        baseURL: process.env.API_BASE_URL || apiOptions.baseURL || apiOptions.baseUrl || '',
-        headers: { ...(apiOptions.headers || {}) },
+        baseURL: process.env.CHATBOT_CONFIG_BASE_URL
+            || process.env.API_BASE_URL
+            || apiOptions.baseURL
+            || apiOptions.baseUrl
+            || '',
+        headers,
         params: { ...(apiOptions.params || {}) },
         endpoint: process.env.CHATBOT_CONFIG_ENDPOINT || DEFAULT_ENDPOINT,
         timeoutMs: parsePositiveInt(process.env.CHATBOT_CONFIG_SYNC_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),

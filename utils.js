@@ -13,6 +13,132 @@ export const template = (source, tags) => {
     return result;
 };
 
+const CYRILLIC_PATTERN = /[А-Яа-яЁё]/;
+const ruBoundary = (pattern) => new RegExp(`(?:^|[^\\p{L}\\p{N}_])(?:${pattern})(?=$|[^\\p{L}\\p{N}_])`, 'iu');
+
+const RUSSIAN_MEMORY_MARKERS = {
+    preference: [
+        ruBoundary('я\\s+(?:люблю|обожаю|предпочитаю|ненавижу|не\\s+люблю)'),
+        ruBoundary('мне\\s+(?:нравится|не\\s+нравится|по\\s+душе)'),
+        ruBoundary('мой\\s+(?:любимый|нелюбимый)'),
+        ruBoundary('моя\\s+(?:любимая|нелюбимая)'),
+        ruBoundary('мое\\s+(?:любимое|нелюбимое)'),
+        ruBoundary('всегда'),
+        ruBoundary('никогда'),
+    ],
+    decision: [
+        ruBoundary('(?:мы|я)\\s+решил[аи]?'),
+        ruBoundary('решили'),
+        ruBoundary('давай(?:те)?'),
+        ruBoundary('лучше'),
+        ruBoundary('вместо'),
+        ruBoundary('потому\\s+что'),
+        ruBoundary('выбираю'),
+        ruBoundary('буду\\s+(?:использовать|делать|играть|смотреть)'),
+    ],
+    problem: [
+        ruBoundary('(?:ошибка|баг|проблема|краш|таймаут|лаг|лаги)'),
+        ruBoundary('не\\s+работает'),
+        ruBoundary('не\\s+отвечает'),
+        ruBoundary('не\\s+запускается'),
+        ruBoundary('сломал[ао]?сь?'),
+        ruBoundary('зависает'),
+    ],
+    milestone: [
+        ruBoundary('(?:починил[аи]?|починено|заработало|получилось|запустил[аи]?|сделал[аи]?|наш[её]л|готово)'),
+        ruBoundary('разобрал(?:ся|ась|ись)'),
+        ruBoundary('вышло'),
+    ],
+    emotional: [
+        ruBoundary('(?:рад|рада|грустно|бесит|страшно|люблю|скучаю|злюсь|обидно|переживаю|ненавижу)'),
+        ruBoundary('счастлив[а]?'),
+        ruBoundary('устал[а]?'),
+    ],
+};
+
+const RUSSIAN_MEMORY_TYPE_PRIORITY = ['preference', 'problem', 'decision', 'milestone', 'emotional'];
+
+export const looksCyrillic = (text) => CYRILLIC_PATTERN.test(String(text || ''));
+
+export const normalizeMemoryText = (text, limit = Infinity) => {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!Number.isFinite(limit) || normalized.length <= limit) {
+        return normalized;
+    }
+    return `${normalized.slice(0, Math.max(0, limit - 3)).trim()}...`;
+};
+
+const splitMemorySegments = (text) => {
+    const normalized = normalizeMemoryText(text);
+    if (!normalized) {
+        return [];
+    }
+
+    return normalized
+        .split(/(?:\n+|(?<=[.!?…])\s+)/u)
+        .map((segment) => segment.trim())
+        .filter(Boolean)
+        .slice(0, 6);
+};
+
+const scoreRussianMemoryType = (segment, markers) =>
+    markers.reduce((score, marker) => score + (marker.test(segment) ? 1 : 0), 0);
+
+export const extractRussianMemories = (text) => {
+    if (!looksCyrillic(text)) {
+        return [];
+    }
+
+    return splitMemorySegments(text)
+        .map((segment) => {
+            const scores = Object.fromEntries(
+                Object.entries(RUSSIAN_MEMORY_MARKERS)
+                    .map(([type, markers]) => [type, scoreRussianMemoryType(segment, markers)])
+                    .filter(([, score]) => score > 0),
+            );
+            if (Object.keys(scores).length === 0) {
+                return null;
+            }
+
+            const memoryType = RUSSIAN_MEMORY_TYPE_PRIORITY
+                .slice()
+                .sort((left, right) => (scores[right] || 0) - (scores[left] || 0))[0];
+            return {
+                content: segment,
+                memory_type: memoryType,
+                chunk_index: 0,
+            };
+        })
+        .filter(Boolean)
+        .map((memory, index) => ({ ...memory, chunk_index: index }));
+};
+
+export const extractChatUserMemories = (text, englishExtractor = () => []) => {
+    const normalized = normalizeMemoryText(text);
+    if (!normalized) {
+        return [];
+    }
+
+    const extracted = [
+        ...englishExtractor(normalized),
+        ...extractRussianMemories(normalized),
+    ];
+    const seen = new Set();
+    return extracted.filter((memory) => {
+        const content = normalizeMemoryText(memory?.content);
+        const memoryType = memory?.memory_type;
+        if (!content || !memoryType) {
+            return false;
+        }
+        const key = `${memoryType}:${content.toLowerCase()}`;
+        if (seen.has(key)) {
+            return false;
+        }
+        seen.add(key);
+        return true;
+    });
+};
+
 export const toFormUrlEncoded = (data) => new URLSearchParams(data).toString();
 
 export const buildUrl = (baseURL, path, params = {}) => {

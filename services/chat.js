@@ -1,30 +1,13 @@
-import crypto from 'node:crypto';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import dialogflow from 'dialogflow';
-import mempalace from 'mempalace-node';
 import OpenAI from 'openai';
-import { choose, template } from '../utils.js';
+import { choose, normalizeMemoryText, template } from '../utils.js';
+import { MemoryService } from './memory.js';
 import { WebSearchService } from './search.js';
 
-const { createStore, extractMemories, setModel } = mempalace;
-const CHAT_MEMORY_PATH = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    '..',
-    'data',
-    'mempalace',
-    'chat-users',
-);
-const MEMORY_COLLECTION = 'chat_user_memories';
 const CHANNEL_CONTEXT_LIMIT = 8;
 const USER_THREAD_LIMIT = 8;
-const MEMORY_QUERY_LIMIT = 3;
-const MEMORY_MIN_QUERY_LENGTH = 12;
-const MEMORY_MIN_SIMILARITY = 0.35;
-const MEMORY_SNIPPET_LIMIT = 180;
-const MEMORY_MIN_MESSAGE_LENGTH = 20;
-const MAX_EXTRACTED_MEMORIES = 3;
 const WEB_SEARCH_TOOL_PATTERN = /^\[WEB_SEARCH\]\s*(.+)$/i;
+const CHAT_AUTHOR_PREFIX_PATTERN = /^@[\p{L}\p{N}_.-]{1,32}\s*[:：]\s*/u;
 const DEFAULT_AI_TIMEOUT_MS = 60000;
 const WEB_SEARCH_TOOL_NAME = 'web_search';
 
@@ -32,6 +15,8 @@ const parseTimeoutMs = (value, fallback) => {
     const parsed = Number.parseInt(String(value ?? ''), 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export class ChatService {
     constructor({ config, backendClient, getLastSongText }) {
@@ -44,12 +29,10 @@ export class ChatService {
         this.promptContext = {
             channelWindow: CHANNEL_CONTEXT_LIMIT,
             userWindow: USER_THREAD_LIMIT,
-            memoryHits: MEMORY_QUERY_LIMIT,
         };
         this.backendToolSupport = {};
         this.webSearch = new WebSearchService({ config });
-        this.userMemoryStore = this.#createUserMemoryStore();
-        this.userMemoryQueue = Promise.resolve();
+        this.memory = new MemoryService({ config });
         this.questionThrottle = {
             users: {},
             limit: 5000,
@@ -129,10 +112,8 @@ export class ChatService {
         userdata.username = username;
         const streamer = this.config.TWITCH.streamers[promptChannel];
         tokens = tokens || (options.forceTrigger ? [msg] : (streamer && msg.match(streamer.regex) ? [msg] : null));
-        const memoryMessage = isCommand
-            ? msg
-            : (tokens === null ? msg : tokens[tokens.length - 1].trim());
-        this.#rememberUserMemories(channel, uuid, username, memoryMessage);
+        const memoryMessage = isCommand || tokens === null ? msg : tokens[tokens.length - 1].trim();
+        this.memory.rememberUserMessage({ channel, uuid, username, message: memoryMessage });
         if (tokens == null) {
             this.#aichatMessage(userdata.chat, username, msg);
             return false;
@@ -156,7 +137,7 @@ export class ChatService {
 
         if (timestamp - userdata.throttle < this.questionThrottle.limit) {
             setTimeout(
-                () => this.#aichatProcess(channel, uuid, callback),
+                () => this.#aichatProcess(channel, uuid, callback, isCommand),
                 timestamp - userdata.throttle + 500,
             );
             this.#aichatMessage(userdata.chat, username, msg);
@@ -180,7 +161,7 @@ export class ChatService {
 
         userdata.throttle = timestamp;
         this.#aichatMessage(userdata.chat, username, msg);
-        this.#aichatProcess(channel, uuid, callback);
+        this.#aichatProcess(channel, uuid, callback, isCommand);
         return true;
     }
 
@@ -290,9 +271,13 @@ export class ChatService {
         const username = data.data?.[0]?.user_name || streamer;
         const game = data.data?.[0]?.game_name || 'стрим оффлайн';
         const title = data.data?.[0]?.title || 'стрим оффлайн';
-        const today = new Date(Date.now()).toISOString();
+        const today = this.#getToday().toGMTString();
         const viewers = data.data?.[0]?.viewer_count || 0;
         return { bot, streamer, username, game, title, today, viewers };
+    }
+
+    #getToday() {
+        return new Date(Date.now());
     }
 
     #aichatChannelCreate(channel) {
@@ -338,9 +323,14 @@ export class ChatService {
         }
         if (username === this.#ai().system) {
             chat.data.push({ role: this.#ai().system, content: message });
+        } else if (username === this.config.BOT_NAME) {
+            chat.data.push({
+                role: 'assistant',
+                content: message,
+            });
         } else {
             chat.data.push({
-                role: username === this.config.BOT_NAME ? 'assistant' : 'user',
+                role: 'user',
                 content: `@${username}: ${message}`,
             });
         }
@@ -354,146 +344,6 @@ export class ChatService {
     #aichatBump(chat) {
         chat.data[0].content = template(this.config.BOT_CONTEXT, this.streamerData[chat.promptChannel || chat.channel]);
         chat.bump = chat.size;
-    }
-
-    #createUserMemoryStore() {
-        try {
-            setModel('multilingual');
-            return createStore(CHAT_MEMORY_PATH, MEMORY_COLLECTION);
-        } catch (error) {
-            console.error('[MemoryError] Failed to initialize memory store:', error?.message || error);
-            return null;
-        }
-    }
-
-    #queueUserMemoryWrite(task) {
-        if (!this.userMemoryStore) {
-            return;
-        }
-
-        this.userMemoryQueue = this.userMemoryQueue
-            .then(() => task())
-            .catch((error) => console.error('[MemoryError]', error?.message || error));
-    }
-
-    #memoryWing(uuid) {
-        return `user_${String(uuid).toLowerCase().replace(/[^\w:-]+/g, '_')}`;
-    }
-
-    #memoryNormalizeText(text, limit = 500) {
-        const normalized = String(text || '')
-            .replace(/\s+/g, ' ')
-            .trim();
-        if (normalized.length <= limit) {
-            return normalized;
-        }
-        return `${normalized.slice(0, limit - 3)}...`;
-    }
-
-    #memorySnippet(text, limit = MEMORY_SNIPPET_LIMIT) {
-        return this.#memoryNormalizeText(text, limit);
-    }
-
-    #memoryImportance(room) {
-        switch (room) {
-            case 'preference':
-            case 'decision':
-                return 5;
-            case 'milestone':
-            case 'emotional':
-                return 4;
-            case 'problem':
-                return 3;
-            case 'conversation':
-                return 2;
-            default:
-                return 1;
-        }
-    }
-
-    #memoryId(uuid, room, content) {
-        return crypto
-            .createHash('sha1')
-            .update(`${uuid}:${room}:${content}`)
-            .digest('hex');
-    }
-
-    #memoryMetadata(channel, uuid, username, room) {
-        return {
-            wing: this.#memoryWing(uuid),
-            room,
-            hall: channel,
-            source_file: `chat:${channel}`,
-            added_by: this.config.BOT_NAME,
-            filed_at: new Date().toISOString(),
-            importance: this.#memoryImportance(room),
-            username,
-            channel,
-            uuid,
-        };
-    }
-
-    #rememberUserMemories(channel, uuid, username, message) {
-        const text = this.#memoryNormalizeText(message);
-        if (!this.userMemoryStore || text.length < MEMORY_MIN_MESSAGE_LENGTH) {
-            return;
-        }
-
-        let extracted = [];
-        try {
-            const seen = new Set();
-            extracted = extractMemories(text)
-                .map((memory) => ({
-                    room: memory.memory_type,
-                    content: this.#memoryNormalizeText(memory.content),
-                }))
-                .filter((memory) => {
-                    if (memory.content.length < MEMORY_MIN_MESSAGE_LENGTH) {
-                        return false;
-                    }
-                    const key = `${memory.room}:${memory.content.toLowerCase()}`;
-                    if (seen.has(key)) {
-                        return false;
-                    }
-                    seen.add(key);
-                    return true;
-                })
-                .slice(0, MAX_EXTRACTED_MEMORIES);
-        } catch (error) {
-            console.error('[MemoryError] Failed to extract user memory:', error?.message || error);
-            return;
-        }
-
-        if (extracted.length === 0) {
-            return;
-        }
-
-        this.#queueUserMemoryWrite(async () => {
-            for (const memory of extracted) {
-                await this.userMemoryStore.upsert(
-                    this.#memoryId(uuid, memory.room, memory.content),
-                    memory.content,
-                    this.#memoryMetadata(channel, uuid, username, memory.room),
-                );
-            }
-        });
-    }
-
-    #rememberConversationTurn(channel, uuid, username, prompt, answer) {
-        const userPrompt = this.#memoryNormalizeText(prompt, 320);
-        const botAnswer = this.#memoryNormalizeText(answer, 320);
-        if (!this.userMemoryStore || userPrompt.length < MEMORY_MIN_MESSAGE_LENGTH || botAnswer.length === 0) {
-            return;
-        }
-
-        const document = `@${username}: ${userPrompt}\n@${this.config.BOT_NAME}: ${botAnswer}`;
-        this.#queueUserMemoryWrite(async () => {
-            await this.userMemoryStore.upsert(
-                this.#memoryId(uuid, 'conversation', document),
-                document,
-                this.#memoryMetadata(channel, uuid, username, 'conversation'),
-            );
-        });
     }
 
     #aichatRecentDialog(chat) {
@@ -517,52 +367,7 @@ export class ChatService {
         ].join('\n');
     }
 
-    async #aichatBuildUserMemoryContext(uuid, username, query) {
-        const searchQuery = this.#memoryNormalizeText(query, 320);
-        if (
-            !this.userMemoryStore
-            || searchQuery.length < MEMORY_MIN_QUERY_LENGTH
-            || this.userMemoryStore.count() === 0
-        ) {
-            return null;
-        }
-
-        try {
-            const result = await this.userMemoryStore.query({
-                queryText: searchQuery,
-                nResults: this.promptContext.memoryHits,
-                where: { wing: this.#memoryWing(uuid) },
-            });
-            const docs = result.documents?.[0] || [];
-            const metas = result.metadatas?.[0] || [];
-            const distances = result.distances?.[0] || [];
-            const lines = docs
-                .map((doc, index) => {
-                    const similarity = 1 - (distances[index] || 1);
-                    if (similarity < MEMORY_MIN_SIMILARITY) {
-                        return null;
-                    }
-                    const room = metas[index]?.room || 'memory';
-                    return `- [${room}] ${this.#memorySnippet(doc)}`;
-                })
-                .filter(Boolean);
-
-            if (lines.length === 0) {
-                return null;
-            }
-
-            return [
-                `[СПРАВОЧНЫЕ ФАКТЫ О ПОЛЬЗОВАТЕЛЕ @${username}]`,
-                `Используй эти факты ТОЛЬКО если они критически необходимы для ответа на АКТУАЛЬНЫЙ ВОПРОС. Иначе полностью игнорируй их:`,
-                ...lines,
-            ].join('\n');
-        } catch (error) {
-            console.error('[MemoryError] Failed to load user memory:', error?.message || error);
-            return null;
-        }
-    }
-
-    async #aichatBuildMessages(channel, uuid, memoryQuery, username, extraSystemMessages = []) {
+    async #aichatBuildMessages(channel, uuid, memoryQuery, username, direct = false) {
         const userdata = this.questionThrottle.users[uuid];
         this.#aichatBump(userdata.chat);
         const recentDialog = this.#aichatRecentDialog(userdata.chat);
@@ -571,7 +376,6 @@ export class ChatService {
             content: userdata.chat.data[0].content,
         }];
 
-        messages.push({ role: this.#ai().system, content: this.config.BOT_PRIVATE });
         const webToolInstruction = this.#aichatBuildWebSearchToolInstruction();
         if (webToolInstruction) {
             messages.push({ role: this.#ai().system, content: webToolInstruction });
@@ -582,19 +386,24 @@ export class ChatService {
             messages.push({ role: this.#ai().system, content: channelContext });
         }
 
-        const userMemoryContext = await this.#aichatBuildUserMemoryContext(uuid, username, memoryQuery);
-        if (userMemoryContext) {
-            messages.push({ role: this.#ai().system, content: userMemoryContext });
-        }
-
-        if (extraSystemMessages.length > 0) {
-            messages.push(...extraSystemMessages);
+        const memoryContext = await this.memory.buildContext({
+            uuid,
+            username,
+            query: memoryQuery,
+            recentDialog,
+        });
+        if (memoryContext) {
+            messages.push({ role: this.#ai().system, content: memoryContext });
         }
 
         const dialog = [...recentDialog]; 
-        if (dialog.length > 0) {
+        if (direct && dialog.length > 0) {
             const lastMessage = dialog.pop(); 
-            lastMessage.content = `[АКТУАЛЬНЫЙ ВОПРОС - ОТВЕЧАЙ ТОЛЬКО НА НЕГО]\n${lastMessage.content}\n\n[НАПОМИНАНИЕ ПРАВИЛ: Не повторяй вопрос в ответе. Если не знаешь ответ — выдай ровно слово [IDK]. Держи свой токсичный стиль.]`;
+            lastMessage.content = [
+                '[АКТУАЛЬНЫЙ ВОПРОС - ОТВЕЧАЙ ТОЛЬКО НА НЕГО]',
+                lastMessage.content,
+                '[НАПОМИНАНИЕ ПРАВИЛ: Не повторяй вопрос в ответе. Если не знаешь ответ — выдай ровно слово [IDK]. Держи свой токсичный стиль.]'
+            ].join('\n');
             dialog.push(lastMessage);
         }
 
@@ -602,9 +411,12 @@ export class ChatService {
     }
 
     #aichatCleanupOutput(output) {
+        const botPrefixPattern = new RegExp(`^@?${escapeRegExp(this.config.BOT_NAME)}\\s*[:：]\\s*`, 'i');
         return String(output || '')
             .replace(/\(\[.+\]\s*\(http.+\)\)/i, '')
             .replace(/\[(.+)\]\s*\(http.+\)/i, '$1')
+            .replace(botPrefixPattern, '')
+            .replace(CHAT_AUTHOR_PREFIX_PATTERN, '')
             .trim();
     }
 
@@ -679,7 +491,7 @@ export class ChatService {
             return null;
         }
 
-        const query = this.#memoryNormalizeText(match[1], 140);
+        const query = normalizeMemoryText(match[1], 140);
         if (query.length < 3) {
             return null;
         }
@@ -706,7 +518,7 @@ export class ChatService {
             args = {};
         }
 
-        const query = this.#memoryNormalizeText(args.query || args.q || '', 140);
+        const query = normalizeMemoryText(args.query || args.q || '', 140);
         if (query.length < 3) {
             return null;
         }
@@ -766,23 +578,22 @@ export class ChatService {
     }
 
     async #aichatRunWebSearchTool(channel, query) {
+        console.log(`[WebSearch][${channel}] ${query}`);
         const webContext = await this.webSearch.buildContext(query);
         if (!webContext) {
             return [
                 `WEB_SEARCH results for "${query}": no reliable results found.`,
                 'No additional web searches are available in this turn. Answer from the existing context or reply with [IDK].',
-            ].join('\n\n');
+            ].join('\n');
         }
-
-        console.log(`[WebSearch][${channel}] ${webContext.query}`);
         return [
             `WEB_SEARCH results for "${webContext.query}":`,
             webContext.context,
             'No additional web searches are available in this turn. Use these results if helpful and answer the user directly.',
-        ].join('\n\n');
+        ].join('\n');
     }
 
-    async #aichatProcess(channel, uuid, callback) {
+    async #aichatProcess(channel, uuid, callback, direct) {
         const userdata = this.questionThrottle.users[uuid];
         if (!userdata || this.#aichatIsEmpty(userdata.chat)) {
             return;
@@ -791,7 +602,7 @@ export class ChatService {
         const memoryQuery = userdata.lastPrompt;
         const rawPrompt = userdata.lastRawMessage;
         const username = userdata.username;
-        const messages = await this.#aichatBuildMessages(channel, uuid, memoryQuery, username);
+        const messages = await this.#aichatBuildMessages(channel, uuid, memoryQuery, username, direct);
 
         try {
             let { output, toolRequest, assistantMessage } = await this.#aichatGenerate(messages);
@@ -827,7 +638,13 @@ export class ChatService {
 
             this.#aichatMessage(userdata.chat, this.config.BOT_NAME, output);
             this.#aichatRememberChannel(channel, this.config.BOT_NAME, output);
-            this.#rememberConversationTurn(channel, uuid, username, rawPrompt || memoryQuery, output);
+            this.memory.rememberConversationTurn({
+                channel,
+                uuid,
+                username,
+                prompt: rawPrompt || memoryQuery,
+                answer: output,
+            });
 
             callback({
                 text: output,

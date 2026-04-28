@@ -8,6 +8,11 @@ const DEFAULT_WEB_SEARCH = {
     format: 'json',
     maxResults: 3,
     fetchTimeoutMs: 5000,
+    searchTimeoutMs: 5000,
+    pageFetchTimeoutMs: 12000,
+    readerTimeoutMs: 15000,
+    readerFallbackEnabled: true,
+    readerBaseUrl: 'https://r.jina.ai/',
     maxContentLength: 900,
     maxContextLength: 2800,
     minQueryLength: 8,
@@ -20,9 +25,27 @@ const DEFAULT_WEB_SEARCH = {
 export class WebSearchService {
     constructor({ config }) {
         const webConfig = config.WEB_SEARCH || {};
+        const sanitizedConfig = Object.fromEntries(
+            Object.entries(webConfig).filter(([, value]) => value !== undefined)
+        );
+        const fetchTimeoutMs = this.#parsePositiveInt(
+            sanitizedConfig.fetchTimeoutMs,
+            DEFAULT_WEB_SEARCH.fetchTimeoutMs,
+        );
+        const pageFetchTimeoutMs = this.#parsePositiveInt(
+            sanitizedConfig.pageFetchTimeoutMs,
+            Math.max(fetchTimeoutMs, DEFAULT_WEB_SEARCH.pageFetchTimeoutMs),
+        );
         this.config = {
             ...DEFAULT_WEB_SEARCH,
-            ...webConfig,
+            ...sanitizedConfig,
+            fetchTimeoutMs,
+            searchTimeoutMs: this.#parsePositiveInt(sanitizedConfig.searchTimeoutMs, fetchTimeoutMs),
+            pageFetchTimeoutMs,
+            readerTimeoutMs: this.#parsePositiveInt(
+                sanitizedConfig.readerTimeoutMs,
+                Math.max(pageFetchTimeoutMs, DEFAULT_WEB_SEARCH.readerTimeoutMs),
+            ),
             extraParams: {
                 ...DEFAULT_WEB_SEARCH.extraParams,
                 ...(webConfig.extraParams || {}),
@@ -100,7 +123,7 @@ export class WebSearchService {
                     'user-agent': this.config.userAgent,
                     accept: 'application/json,text/html;q=0.9,*/*;q=0.8',
                 },
-                signal: AbortSignal.timeout(this.config.fetchTimeoutMs),
+                signal: AbortSignal.timeout(this.config.searchTimeoutMs),
             });
             if (!response.ok) {
                 return [];
@@ -182,13 +205,31 @@ export class WebSearchService {
     }
 
     async #fetchWebContent(url) {
+        const directContent = await this.#fetchDirectWebContent(url);
+        if (directContent) {
+            return directContent;
+        }
+
+        if (this.config.readerFallbackEnabled) {
+            const readerContent = await this.#fetchReaderContent(url);
+            if (readerContent) {
+                return readerContent;
+            }
+        }
+
+        return '';
+    }
+
+    async #fetchDirectWebContent(url) {
         try {
             const response = await fetch(url, {
                 headers: {
                     'user-agent': this.config.userAgent,
                     accept: 'text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8,*/*;q=0.7',
+                    'accept-language': 'ru,en;q=0.9,*;q=0.8',
+                    'accept-encoding': 'identity',
                 },
-                signal: AbortSignal.timeout(this.config.fetchTimeoutMs),
+                signal: AbortSignal.timeout(this.config.pageFetchTimeoutMs),
             });
             if (!response.ok) {
                 return '';
@@ -198,9 +239,55 @@ export class WebSearchService {
             const rawContent = await response.text();
             return this.#extractReadableText(rawContent, url, contentType);
         } catch (error) {
-            console.error('[WebFetchError]', error?.message || error);
             return '';
         }
+    }
+
+    async #fetchReaderContent(url) {
+        try {
+            const readerUrl = this.#buildReaderUrl(url);
+            const response = await fetch(readerUrl, {
+                headers: {
+                    'user-agent': this.config.userAgent,
+                    accept: 'text/plain,*/*;q=0.8',
+                    'accept-language': 'ru,en;q=0.9,*;q=0.8',
+                    'x-respond-with': 'text',
+                },
+                signal: AbortSignal.timeout(this.config.readerTimeoutMs),
+            });
+            if (!response.ok) {
+                return '';
+            }
+
+            const text = this.#cleanReaderText(await response.text());
+            return this.#trim(text, this.config.maxContentLength);
+        } catch {
+            return '';
+        }
+    }
+
+    #buildReaderUrl(url) {
+        const baseUrl = this.config.readerBaseUrl.endsWith('/')
+            ? this.config.readerBaseUrl
+            : `${this.config.readerBaseUrl}/`;
+        return `${baseUrl}${url}`;
+    }
+
+    #cleanReaderText(text) {
+        const normalized = String(text || '').trim();
+        const marker = 'Markdown Content:';
+        const markerIndex = normalized.indexOf(marker);
+        if (markerIndex === -1) {
+            return normalized;
+        }
+        return normalized.slice(markerIndex + marker.length).trim();
+    }
+
+    #stripNonContentHtml(html) {
+        const $ = cheerio.load(String(html || ''));
+        $('script, style, noscript, svg, canvas, iframe, object, embed, link[rel="stylesheet"]').remove();
+        $('[style]').removeAttr('style');
+        return $.html();
     }
 
     #extractReadableText(rawContent, url, contentType) {
@@ -214,10 +301,11 @@ export class WebSearchService {
             return this.#trim(this.#normalizeText(text), this.config.maxContentLength);
         }
 
+        const contentHtml = this.#stripNonContentHtml(text);
         try {
             const virtualConsole = new VirtualConsole();
             virtualConsole.on('error', () => {});
-            const dom = new JSDOM(text, {
+            const dom = new JSDOM(contentHtml, {
                 url,
                 virtualConsole,
             });
@@ -226,11 +314,11 @@ export class WebSearchService {
             if (content.length > 0) {
                 return this.#trim(content, this.config.maxContentLength);
             }
-        } catch (error) {
-            console.error('[WebExtractError]', error?.message || error);
+        } catch {
+            // Some pages ship CSS that trips jsdom/cssstyle. Cheerio fallback below still extracts text.
         }
 
-        const $ = cheerio.load(text);
+        const $ = cheerio.load(contentHtml);
         return this.#trim(this.#normalizeText($('body').text() || $.text()), this.config.maxContentLength);
     }
 
@@ -275,6 +363,11 @@ export class WebSearchService {
         return String(text || '')
             .replace(/\s+/g, ' ')
             .trim();
+    }
+
+    #parsePositiveInt(value, fallback) {
+        const parsed = Number.parseInt(String(value ?? ''), 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
     }
 
     #trim(text, limit) {
